@@ -33,6 +33,13 @@ function msBetween(fromIso, toIso) {
   return Math.max(0, to - from);
 }
 
+function withTimeout(promise, ms = 12000, message = "Zeitüberschreitung beim Laden.") {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}
+
 export default function Admin({ profile, onProfileUpdated }) {
   const [toast, setToast] = useState(null);
   const [openSections, setOpenSections] = useState({
@@ -75,13 +82,17 @@ export default function Admin({ profile, onProfileUpdated }) {
     if (!isAdmin) return;
     setRideoutLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("rideouts")
-        .select("id, title, join_token, started_at, closed_at")
-        .is("closed_at", null)
-        .order("started_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const { data, error } = await withTimeout(
+        supabase
+          .from("rideouts")
+          .select("id, title, join_token, started_at, closed_at")
+          .is("closed_at", null)
+          .order("started_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        12000,
+        "Zeitüberschreitung beim Laden des Rideout-Status."
+      );
       if (error) throw error;
       setActiveRideout(data ?? null);
     } catch (e) {
@@ -167,10 +178,14 @@ export default function Admin({ profile, onProfileUpdated }) {
     if (!isAdmin) return;
     setProfilesLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("user_id, full_name, role")
-        .order("full_name", { ascending: true, nullsFirst: false });
+      const { data, error } = await withTimeout(
+        supabase
+          .from("profiles")
+          .select("user_id, full_name, role")
+          .order("full_name", { ascending: true, nullsFirst: false }),
+        12000,
+        "Zeitüberschreitung beim Laden der Benutzerverwaltung."
+      );
       if (error) throw error;
       setProfilesRows(data ?? []);
     } catch (e) {
@@ -223,19 +238,23 @@ export default function Admin({ profile, onProfileUpdated }) {
 
     try {
       const [{ data: incidentsData, error: incidentsErr }, { data: assignmentsData, error: assignmentsErr }, { data: profilesData, error: profilesErr }] =
-        await Promise.all([
-          supabase
-            .from("incidents")
-            .select("id, created_at, closed_at, lat, lng, severity, note, needs_backup, created_by")
-            .order("created_at", { ascending: false })
-            .limit(500),
-          supabase
-            .from("incident_assignments")
-            .select("incident_id, helper_id, joined_at, left_at")
-            .order("joined_at", { ascending: true })
-            .limit(5000),
-          supabase.from("profiles").select("user_id, full_name"),
-        ]);
+        await withTimeout(
+          Promise.all([
+            supabase
+              .from("incidents")
+              .select("id, created_at, closed_at, lat, lng, severity, note, needs_backup, created_by")
+              .order("created_at", { ascending: false })
+              .limit(500),
+            supabase
+              .from("incident_assignments")
+              .select("incident_id, helper_id, joined_at, left_at")
+              .order("joined_at", { ascending: true })
+              .limit(5000),
+            supabase.from("profiles").select("user_id, full_name"),
+          ]),
+          12000,
+          "Zeitüberschreitung beim Laden der Incident-Auswertung."
+        );
 
       if (incidentsErr) throw incidentsErr;
       if (assignmentsErr) throw assignmentsErr;

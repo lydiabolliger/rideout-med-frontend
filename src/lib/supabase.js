@@ -7,7 +7,6 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 // HMR-safe singleton (verhindert mehrere GoTrueClient Instanzen in dev)
 const globalKey = "__rideout_supabase__";
 
-console.log(SUPABASE_ANON_KEY);
 export const supabase =
   globalThis[globalKey] ??
   (globalThis[globalKey] = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {

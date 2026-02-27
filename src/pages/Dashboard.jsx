@@ -612,7 +612,7 @@ useEffect(() => {
       });
 
       const lat = pos.coords.latitude;
-      const lng = pos.coords.longitude;
+      const lng = pos.coords.longitude
 
       const payload = {
         lat,
