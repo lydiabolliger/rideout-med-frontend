@@ -67,7 +67,7 @@ export default function Admin({ profile, onProfileUpdated }) {
 
   const activeRideoutLink = useMemo(() => {
     if (!activeRideout?.join_token) return "";
-    return `${window.location.origin}/login?rideout=${activeRideout.join_token}`;
+    return `${window.location.origin}/?rideout=${activeRideout.join_token}`;
   }, [activeRideout?.join_token]);
 
   const toggleSection = (key) => {
