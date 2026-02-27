@@ -1,0 +1,311 @@
+:root {
+  --bg: #0b0c0f;
+  --panel: rgba(255, 255, 255, 0.06);
+  --panel2: rgba(255, 255, 255, 0.08);
+  --text: rgba(255, 255, 255, 0.92);
+  --muted: rgba(255, 255, 255, 0.62);
+  --border: rgba(255, 255, 255, 0.10);
+  --accent: #22c55e; /* später anpassbar */
+  --radius: 16px;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+  background: var(--bg);
+  color: var(--text);
+}
+
+a { color: inherit; text-decoration: none; }
+
+/* App frame: mobile-first */
+.app {
+  min-height: 100%;
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+}
+
+.app__frame {
+  width: 100%;
+  max-width: 520px;
+  min-height: calc(100vh - 24px);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header */
+.app__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 16px 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0,0,0,0.25);
+}
+
+.app__brandTitle {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.app__brandSub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* Content */
+.app__content {
+  flex: 1;
+  padding: 16px;
+  padding-bottom: 96px; /* Platz für Tabbar */
+}
+
+.screenTitle {
+  margin: 0 0 12px 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+/* Buttons */
+.btn {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-weight: 600;
+}
+
+.btn--ghost {
+  background: transparent;
+}
+
+/* Tabbar */
+.tabbar {
+  position: sticky;
+  bottom: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); /* <- statt repeat(4, 1fr) */
+  gap: 10px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: rgba(0,0,0,0.35);
+  backdrop-filter: blur(10px);
+}
+
+.tabbar__item {
+  height: 48px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.05s ease;
+}
+
+.tabbar__item:active {
+  transform: scale(0.98);
+}
+
+.tabbar__item.is-active {
+  border-color: rgba(34, 197, 94, 0.35);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.25) inset;
+}
+
+.tabbar__label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.tabbar__item.is-active .tabbar__label {
+  color: var(--text);
+}
+
+/* Safe-area spacer (iPhone) */
+.tabbar__safe {
+  height: env(safe-area-inset-bottom);
+  background: rgba(0,0,0,0.35);
+}
+
+.stack { display: grid; gap: 12px; }
+
+.row { display: flex; gap: 12px; align-items: center; }
+.row--between { justify-content: space-between; }
+
+.card {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+.card--warn {
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.card__title {
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
+.mutedSmall { color: var(--muted); font-size: 13px; }
+.mutedTiny { color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+.list { display: grid; gap: 10px; }
+
+.listItem {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: var(--radius);
+  padding: 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.listItem:active { transform: scale(0.995); }
+
+.listItem__title {
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  font-weight: 800;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.badge--low { border-color: rgba(59, 130, 246, 0.30); }
+.badge--med { border-color: rgba(245, 158, 11, 0.35); }
+.badge--high { border-color: rgba(239, 68, 68, 0.40); }
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.kv {
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  border-radius: calc(var(--radius) - 4px);
+  padding: 10px;
+}
+
+.kv__k {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.kv__v {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+/* optional: ab grösserem Screen 2 Spalten */
+@media (min-width: 720px) {
+  .grid2 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* ===== Map / Dashboard additions ===== */
+.mapWrap {
+  position: relative;
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.03);
+}
+
+.map {
+  height: 360px;
+  width: 100%;
+}
+
+.reportBtn {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 14px 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(239, 68, 68, 0.18);
+  color: #fff;
+  font-weight: 900;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+}
+
+.reportBtn:hover {
+  background: rgba(239, 68, 68, 0.28);
+}
+
+.helperMarker {
+  background: transparent;
+  border: none;
+}
+
+.helperMarker__dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 3px solid rgba(34, 197, 94, 0.65);
+  background: rgba(0,0,0,0.65);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+
+/* Modal */
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 2000;
+}
+
+.modal {
+  width: min(520px, 96vw);
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(20,20,20,0.92);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.55);
+  padding: 16px;
+}
+
+/* Leaflet (keep it clean in dark UI) */
+.leaflet-container {
+  background: #0b0b0b;
+}
+
+.leaflet-control-attribution {
+  display: none;
+}
