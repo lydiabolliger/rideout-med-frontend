@@ -122,11 +122,25 @@ export default function Admin({ profile, onProfileUpdated }) {
         created_by: profile?.user_id ?? null,
       };
 
-      const { data, error } = await supabase
+      let insertResult = await supabase
         .from("rideouts")
         .insert(payload)
         .select("id, title, join_token, started_at, closed_at")
         .single();
+
+      // Legacy schema compatibility: some environments still require rideout_date (NOT NULL).
+      if (insertResult.error?.message?.includes("rideout_date")) {
+        insertResult = await supabase
+          .from("rideouts")
+          .insert({
+            ...payload,
+            rideout_date: new Date().toISOString().slice(0, 10),
+          })
+          .select("id, title, join_token, started_at, closed_at")
+          .single();
+      }
+
+      const { data, error } = insertResult;
       if (error) throw error;
 
       setActiveRideout(data);
