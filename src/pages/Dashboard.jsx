@@ -306,7 +306,11 @@ useEffect(() => {
 
   // ---------- Load helpers + realtime updates ----------
   useEffect(() => {
-    if (!profile?.role) return;
+    if (!me?.id) return;
+    if (!activeRideoutId) {
+      setHelpers([]);
+      return;
+    }
 
     let alive = true;
     let channel = null;
@@ -347,28 +351,21 @@ useEffect(() => {
     loadHelpers();
 
     channel = supabase
-      .channel("helper-locations")
+      .channel("helpers-live")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "helper_locations" },
-        (payload) => {
+        () => {
           if (!alive) return;
-          const row = payload.new || payload.old;
-          if (!row?.user_id) return;
-
-          setHelpers((prev) =>
-            prev.map((h) =>
-              h.user_id === row.user_id
-                ? {
-                    ...h,
-                    lat: row.lat ?? h.lat,
-                    lng: row.lng ?? h.lng,
-                    status: row.status ?? h.status,
-                    updated_at: row.updated_at ?? h.updated_at,
-                  }
-                : h
-            )
-          );
+          loadHelpers();
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "profiles" },
+        () => {
+          if (!alive) return;
+          loadHelpers();
         }
       )
       .subscribe();
@@ -377,12 +374,36 @@ useEffect(() => {
       alive = false;
       if (channel) supabase.removeChannel(channel);
     };
-  }, [profile?.role]);
+  }, [me?.id, activeRideoutId]);
+
+  // ---------- Track my location (only helpers) ----------
+  useEffect(() => {
+    if (!me?.id || !isHelper || !activeRideoutId) return;
+
+    supabase
+      .from("rideout_helpers")
+      .upsert(
+        {
+          rideout_id: activeRideoutId,
+          helper_id: me.id,
+          joined_at: new Date().toISOString(),
+          last_seen_at: new Date().toISOString(),
+        },
+        { onConflict: "rideout_id,helper_id" }
+      )
+      .then(() => {})
+      .catch((e) => console.warn("[Dashboard] rideout helper register failed", e));
+  }, [me?.id, isHelper, activeRideoutId]);
 
   // ---------- Track my location (only helpers) ----------
   useEffect(() => {
     if (!me?.id) return;
     if (!isHelper) return;
+    if (!activeRideoutId) {
+      // Rideout closed/no access: remove stale location entry so live map clears automatically.
+      supabase.from("helper_locations").delete().eq("user_id", me.id).then(() => {}).catch(() => {});
+      return;
+    }
 
     if (!canUseLocation) {
       setToast("Dein Browser unterstützt Geolocation nicht.");
@@ -390,6 +411,22 @@ useEffect(() => {
     }
 
     let stopped = false;
+
+    const upsertRideoutParticipant = async () => {
+      try {
+        await supabase.from("rideout_helpers").upsert(
+          {
+            rideout_id: activeRideoutId,
+            helper_id: me.id,
+            joined_at: new Date().toISOString(),
+            last_seen_at: new Date().toISOString(),
+          },
+          { onConflict: "rideout_id,helper_id" }
+        );
+      } catch (e) {
+        console.warn("[Dashboard] rideout helper upsert failed", e);
+      }
+    };
 
     const upsertLocation = async (lat, lng, status) => {
       try {
@@ -403,6 +440,7 @@ useEffect(() => {
           },
           { onConflict: "user_id" }
         );
+        await upsertRideoutParticipant();
       } catch (e) {
         console.warn("[Dashboard] upsert location failed", e);
       }
@@ -427,7 +465,7 @@ useEffect(() => {
       stopped = true;
       navigator.geolocation.clearWatch(watchId);
     };
-  }, [me?.id, isHelper, myStatus, canUseLocation]);
+  }, [me?.id, isHelper, myStatus, canUseLocation, activeRideoutId]);
 
   // ---------- Incidents: load + realtime ----------
   const loadIncidents = useCallback(async () => {

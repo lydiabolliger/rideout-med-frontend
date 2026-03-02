@@ -63,6 +63,7 @@ export default function Admin({ profile, onProfileUpdated }) {
   const [rideouts, setRideouts] = useState([]);
   const [incidents, setIncidents] = useState([]);
   const [assignmentsByIncident, setAssignmentsByIncident] = useState({});
+  const [helpersByRideout, setHelpersByRideout] = useState({});
   const [nameByUserId, setNameByUserId] = useState({});
   const [closingIncidentId, setClosingIncidentId] = useState(null);
 
@@ -183,6 +184,10 @@ export default function Admin({ profile, onProfileUpdated }) {
         .eq("id", activeRideout.id);
       if (error) throw error;
 
+      // Remove live helper locations once rideout closes.
+      const { error: clearLocErr } = await supabase.from("helper_locations").delete();
+      if (clearLocErr) throw clearLocErr;
+
       localStorage.removeItem(RIDEOUT_TOKEN_STORAGE_KEY);
       setActiveRideout(null);
       setToast("Rideout geschlossen. Link ist nicht mehr gueltig.");
@@ -225,6 +230,12 @@ export default function Admin({ profile, onProfileUpdated }) {
           .in("id", incidentIds);
         if (incidentsErr) throw incidentsErr;
       }
+
+      const { error: rideoutHelpersErr } = await supabase
+        .from("rideout_helpers")
+        .delete()
+        .eq("rideout_id", rideout.id);
+      if (rideoutHelpersErr) throw rideoutHelpersErr;
 
       const { error: rideoutErr } = await supabase
         .from("rideouts")
@@ -326,6 +337,7 @@ export default function Admin({ profile, onProfileUpdated }) {
         { data: rideoutsData, error: rideoutsErr },
         { data: incidentsData, error: incidentsErr },
         { data: assignmentsData, error: assignmentsErr },
+        { data: rideoutHelpersData, error: rideoutHelpersErr },
         { data: profilesData, error: profilesErr },
       ] = await withTimeout(
         Promise.all([
@@ -344,6 +356,11 @@ export default function Admin({ profile, onProfileUpdated }) {
             .select("incident_id, helper_id, joined_at, left_at")
             .order("joined_at", { ascending: true })
             .limit(8000),
+          supabase
+            .from("rideout_helpers")
+            .select("rideout_id, helper_id, joined_at, last_seen_at")
+            .order("joined_at", { ascending: true })
+            .limit(8000),
           supabase.from("profiles").select("user_id, full_name"),
         ]),
         15000,
@@ -353,6 +370,7 @@ export default function Admin({ profile, onProfileUpdated }) {
       if (rideoutsErr) throw rideoutsErr;
       if (incidentsErr) throw incidentsErr;
       if (assignmentsErr) throw assignmentsErr;
+      if (rideoutHelpersErr) throw rideoutHelpersErr;
       if (profilesErr) throw profilesErr;
 
       const assignmentsGrouped = {};
@@ -366,9 +384,16 @@ export default function Admin({ profile, onProfileUpdated }) {
         names[p.user_id] = p.full_name ?? p.user_id;
       });
 
+      const rideoutHelpersGrouped = {};
+      (rideoutHelpersData ?? []).forEach((h) => {
+        if (!rideoutHelpersGrouped[h.rideout_id]) rideoutHelpersGrouped[h.rideout_id] = [];
+        rideoutHelpersGrouped[h.rideout_id].push(h);
+      });
+
       setRideouts(rideoutsData ?? []);
       setIncidents(incidentsData ?? []);
       setAssignmentsByIncident(assignmentsGrouped);
+      setHelpersByRideout(rideoutHelpersGrouped);
       setNameByUserId(names);
       setOpenIncidents({});
     } catch (e) {
@@ -377,6 +402,7 @@ export default function Admin({ profile, onProfileUpdated }) {
       setRideouts([]);
       setIncidents([]);
       setAssignmentsByIncident({});
+      setHelpersByRideout({});
     } finally {
       setAnalyticsLoading(false);
     }
@@ -580,6 +606,19 @@ export default function Admin({ profile, onProfileUpdated }) {
 
                   {isRideoutOpen && (
                     <div className="stack" style={{ marginTop: 10, gap: 8 }}>
+                      <div className="card" style={{ padding: 10 }}>
+                        <div className="mutedTiny" style={{ marginBottom: 6 }}>Helfer im Rideout:</div>
+                        {(helpersByRideout[rideout.id] ?? []).length === 0 ? (
+                          <div className="mutedSmall">Keine Helfer gespeichert.</div>
+                        ) : (
+                          (helpersByRideout[rideout.id] ?? []).map((h, idx) => (
+                            <div key={`${h.helper_id}-${h.joined_at}-${idx}`} className="mutedSmall">
+                              {nameByUserId[h.helper_id] ?? h.helper_id} | seit {fmtDate(h.joined_at)}
+                            </div>
+                          ))
+                        )}
+                      </div>
+
                       {rideoutIncidentList.length === 0 ? (
                         <div className="mutedSmall">Keine Pins in diesem Rideout.</div>
                       ) : (

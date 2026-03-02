@@ -109,7 +109,13 @@ export default function App() {
   useEffect(() => {
     let mounted = true;
 
-    const fetchProfile = async (userId) => {
+    const fetchProfile = async (user) => {
+      const userId = user?.id;
+      if (!userId) {
+        if (mounted) setProfile(null);
+        return;
+      }
+
       try {
         const { data: prof, error } = await withTimeout(
           supabase
@@ -121,8 +127,37 @@ export default function App() {
           "Profile request timeout"
         );
 
-        if (error) console.warn("[App] profile error", error);
-        if (mounted) setProfile(prof ?? null);
+        if (error) throw error;
+
+        if (prof) {
+          if (mounted) setProfile(prof);
+          return;
+        }
+
+        const fallbackName =
+          user?.user_metadata?.full_name ??
+          user?.user_metadata?.name ??
+          (user?.email ? String(user.email).split("@")[0] : null);
+
+        const { data: created, error: createErr } = await withTimeout(
+          supabase
+            .from("profiles")
+            .upsert(
+              {
+                user_id: userId,
+                full_name: fallbackName,
+                role: "helper",
+              },
+              { onConflict: "user_id" }
+            )
+            .select("user_id, full_name, role")
+            .single(),
+          APP_REQUEST_TIMEOUT_MS,
+          "Profile create timeout"
+        );
+        if (createErr) throw createErr;
+
+        if (mounted) setProfile(created ?? null);
       } catch (e) {
         console.warn("[App] profile catch", e);
         if (mounted) setProfile(null);
@@ -144,7 +179,7 @@ export default function App() {
         setSession(sess);
 
         if (sess?.user?.id) {
-          fetchProfile(sess.user.id);
+          fetchProfile(sess.user);
         } else {
           setProfile(null);
         }
@@ -171,7 +206,7 @@ export default function App() {
 
         try {
           if (newSession?.user?.id) {
-            fetchProfile(newSession.user.id);
+            fetchProfile(newSession.user);
           } else {
             setProfile(null);
           }
