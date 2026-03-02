@@ -113,6 +113,8 @@ export default function Dashboard({ profile, activeRideoutId }) {
   const mapRef = useRef(null);
   const helpersLayerRef = useRef(null);
   const incidentsLayerRef = useRef(null);
+  const openHelperPopupUserIdRef = useRef(null);
+  const suppressHelperPopupCloseRef = useRef(false);
 
   const canUseLocation = useMemo(
     () => typeof navigator !== "undefined" && !!navigator.geolocation,
@@ -197,10 +199,11 @@ export default function Dashboard({ profile, activeRideoutId }) {
   }, [helpers]);
 
   // ---------- Render helpers markers ----------
-  useEffect(() => {
+useEffect(() => {
     const layer = helpersLayerRef.current;
     if (!layer) return;
 
+    suppressHelperPopupCloseRef.current = true;
     layer.clearLayers();
 
     helpers.forEach((h) => {
@@ -219,8 +222,24 @@ export default function Dashboard({ profile, activeRideoutId }) {
         `<b>${h.full_name ?? "Helfer"}</b><br/>Status: ${busy ? "im Einsatz" : "frei"}`
       );
 
+      marker.on("popupopen", () => {
+        openHelperPopupUserIdRef.current = h.user_id;
+      });
+      marker.on("popupclose", () => {
+        if (suppressHelperPopupCloseRef.current) return;
+        if (openHelperPopupUserIdRef.current === h.user_id) {
+          openHelperPopupUserIdRef.current = null;
+        }
+      });
+
       layer.addLayer(marker);
+
+      // Keep helper popup open across live location redraws; user closes it explicitly with X.
+      if (openHelperPopupUserIdRef.current && openHelperPopupUserIdRef.current === h.user_id) {
+        marker.openPopup();
+      }
     });
+    suppressHelperPopupCloseRef.current = false;
   }, [helpers]);
 
 // ---------- Render incident markers ----------

@@ -79,6 +79,20 @@ export default function Admin({ profile, onProfileUpdated }) {
     return grouped;
   }, [incidents]);
 
+  const displayNameByUserId = useMemo(() => {
+    const map = { ...nameByUserId };
+    (profilesRows ?? []).forEach((p) => {
+      if (p?.user_id && p?.full_name) map[p.user_id] = p.full_name;
+    });
+    return map;
+  }, [nameByUserId, profilesRows]);
+
+  const resolveUserName = (userId) => {
+    const name = displayNameByUserId[userId];
+    if (name && String(name).trim().length > 0) return name;
+    return "Unbenannter Helfer";
+  };
+
   const activeRideoutLink = useMemo(() => {
     if (!activeRideout?.join_token) return "";
     return `${window.location.origin}/?rideout=${activeRideout.join_token}`;
@@ -613,7 +627,7 @@ export default function Admin({ profile, onProfileUpdated }) {
                         ) : (
                           (helpersByRideout[rideout.id] ?? []).map((h, idx) => (
                             <div key={`${h.helper_id}-${h.joined_at}-${idx}`} className="mutedSmall">
-                              {nameByUserId[h.helper_id] ?? h.helper_id} | seit {fmtDate(h.joined_at)}
+                              {resolveUserName(h.helper_id)} | seit {fmtDate(h.joined_at)}
                             </div>
                           ))
                         )}
@@ -672,7 +686,7 @@ export default function Admin({ profile, onProfileUpdated }) {
                                       const durationMs = msBetween(a.joined_at, leaveIso);
                                       return (
                                         <div key={`${a.helper_id}-${a.joined_at}-${idx}`} className="mutedSmall">
-                                          {nameByUserId[a.helper_id] ?? a.helper_id} | von {fmtDate(a.joined_at)} bis {a.left_at ? fmtDate(a.left_at) : "offen"} | {fmtDuration(durationMs)}
+                                          {resolveUserName(a.helper_id)} | von {fmtDate(a.joined_at)} bis {a.left_at ? fmtDate(a.left_at) : "offen"} | {fmtDuration(durationMs)}
                                         </div>
                                       );
                                     })
