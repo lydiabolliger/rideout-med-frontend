@@ -94,3 +94,16 @@ with check (
     where p.user_id = auth.uid() and p.role = 'admin'
   )
 );
+
+drop policy if exists "rideouts_delete_admin" on public.rideouts;
+create policy "rideouts_delete_admin"
+on public.rideouts
+for delete
+to authenticated
+using (
+  exists (
+    select 1
+    from public.profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+);

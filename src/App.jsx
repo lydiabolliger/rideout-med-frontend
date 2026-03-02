@@ -11,6 +11,14 @@ import Pin from "./pages/Pin.jsx";
 import Profile from "./pages/Profile.jsx";
 
 const RIDEOUT_TOKEN_STORAGE_KEY = "rideout_join_token";
+const APP_REQUEST_TIMEOUT_MS = 12000;
+
+function withTimeout(promise, ms = APP_REQUEST_TIMEOUT_MS, message = "Request timeout") {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}
 
 function storeRideoutTokenFromUrl() {
   if (typeof window === "undefined") return null;
@@ -92,6 +100,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [rideoutAccessLoading, setRideoutAccessLoading] = useState(true);
   const [hasRideoutAccess, setHasRideoutAccess] = useState(false);
+  const [activeRideoutId, setActiveRideoutId] = useState(null);
 
   useEffect(() => {
     storeRideoutTokenFromUrl();
@@ -102,11 +111,15 @@ export default function App() {
 
     const fetchProfile = async (userId) => {
       try {
-        const { data: prof, error } = await supabase
-          .from("profiles")
-          .select("user_id, full_name, role")
-          .eq("user_id", userId)
-          .maybeSingle();
+        const { data: prof, error } = await withTimeout(
+          supabase
+            .from("profiles")
+            .select("user_id, full_name, role")
+            .eq("user_id", userId)
+            .maybeSingle(),
+          APP_REQUEST_TIMEOUT_MS,
+          "Profile request timeout"
+        );
 
         if (error) console.warn("[App] profile error", error);
         if (mounted) setProfile(prof ?? null);
@@ -118,7 +131,11 @@ export default function App() {
 
     const init = async () => {
       try {
-        const { data, error } = await supabase.auth.getSession();
+        const { data, error } = await withTimeout(
+          supabase.auth.getSession(),
+          APP_REQUEST_TIMEOUT_MS,
+          "Session request timeout"
+        );
         console.log("[App] getSession()", { hasSession: !!data?.session, error });
 
         if (!mounted) return;
@@ -127,7 +144,7 @@ export default function App() {
         setSession(sess);
 
         if (sess?.user?.id) {
-          await fetchProfile(sess.user.id);
+          fetchProfile(sess.user.id);
         } else {
           setProfile(null);
         }
@@ -154,7 +171,7 @@ export default function App() {
 
         try {
           if (newSession?.user?.id) {
-            await fetchProfile(newSession.user.id);
+            fetchProfile(newSession.user.id);
           } else {
             setProfile(null);
           }
@@ -177,6 +194,7 @@ export default function App() {
     const checkRideoutAccess = async () => {
       if (!session?.user?.id) {
         if (alive) {
+          setActiveRideoutId(null);
           setHasRideoutAccess(false);
           setRideoutAccessLoading(false);
         }
@@ -184,6 +202,24 @@ export default function App() {
       }
 
       if (profile?.role === "admin") {
+        try {
+          const { data } = await withTimeout(
+            supabase
+              .from("rideouts")
+              .select("id")
+              .is("closed_at", null)
+              .order("started_at", { ascending: false })
+              .limit(1)
+              .maybeSingle(),
+            APP_REQUEST_TIMEOUT_MS,
+            "Active rideout request timeout"
+          );
+          if (alive) setActiveRideoutId(data?.id ?? null);
+        } catch (e) {
+          console.warn("[App] active rideout fetch failed", e);
+          if (alive) setActiveRideoutId(null);
+        }
+
         if (alive) {
           setHasRideoutAccess(true);
           setRideoutAccessLoading(false);
@@ -194,6 +230,7 @@ export default function App() {
       const token = getStoredRideoutToken();
       if (!token) {
         if (alive) {
+          setActiveRideoutId(null);
           setHasRideoutAccess(false);
           setRideoutAccessLoading(false);
         }
@@ -201,18 +238,32 @@ export default function App() {
       }
 
       if (alive) setRideoutAccessLoading(true);
-      const { data, error } = await supabase
-        .from("rideouts")
-        .select("id")
-        .eq("join_token", token)
-        .is("closed_at", null)
-        .maybeSingle();
+      let data = null;
+      let error = null;
+      try {
+        const res = await withTimeout(
+          supabase
+            .from("rideouts")
+            .select("id")
+            .eq("join_token", token)
+            .is("closed_at", null)
+            .maybeSingle(),
+          APP_REQUEST_TIMEOUT_MS,
+          "Rideout access request timeout"
+        );
+        data = res.data;
+        error = res.error;
+      } catch (e) {
+        error = e;
+      }
 
       if (!alive) return;
       if (error) {
         console.warn("[App] rideout access check failed", error);
+        setActiveRideoutId(null);
         setHasRideoutAccess(false);
       } else {
+        setActiveRideoutId(data?.id ?? null);
         setHasRideoutAccess(!!data?.id);
       }
       setRideoutAccessLoading(false);
@@ -247,14 +298,26 @@ export default function App() {
         >
         {/* ✅ Alles innerhalb der Shell bekommt Header + Tabs */}
         <Route element={<ShellRoute profile={profile} />}>
-          <Route path="/" element={<Dashboard profile={profile} />} />
-          <Route path="/dashboard" element={<Dashboard profile={profile} />} />
+          <Route
+            path="/"
+            element={<Dashboard profile={profile} activeRideoutId={activeRideoutId} />}
+          />
+          <Route
+            path="/dashboard"
+            element={<Dashboard profile={profile} activeRideoutId={activeRideoutId} />}
+          />
 
           {/* List view */}
-          <Route path="/incidents" element={<Incidents profile={profile} />} />
+          <Route
+            path="/incidents"
+            element={<Incidents profile={profile} activeRideoutId={activeRideoutId} />}
+          />
 
           {/* Detail view */}
-          <Route path="/incidents/:id" element={<Pin profile={profile} />} />
+          <Route
+            path="/incidents/:id"
+            element={<Pin profile={profile} activeRideoutId={activeRideoutId} />}
+          />
 
           <Route
             path="/admin"

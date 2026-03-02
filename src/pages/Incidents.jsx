@@ -3,7 +3,7 @@ import { supabase } from "../lib/supabase";
 import { Link, useLocation } from "react-router-dom";
 import { severityBadgeClass, severityLabelDe } from "../lib/severity";
 
-export default function Incidents({ profile }) {
+export default function Incidents({ profile, activeRideoutId }) {
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState([]);
   const [error, setError] = useState(null);
@@ -19,19 +19,17 @@ export default function Incidents({ profile }) {
     try {
       const role = profile?.role;
       if (!role) return;
+      if (!activeRideoutId) {
+        setRows([]);
+        return;
+      }
 
       let q = supabase
         .from("incidents")
-        .select("id, created_at, lat, lng, severity, created_by")
+        .select("id, created_at, lat, lng, severity, created_by, rideout_id")
+        .eq("rideout_id", activeRideoutId)
         .order("created_at", { ascending: false })
         .limit(200);
-
-      if (role !== "admin") {
-        const { data: userData, error: userErr } = await supabase.auth.getUser();
-        if (userErr) throw userErr;
-        const userId = userData?.user?.id;
-        if (userId) q = q.eq("created_by", userId);
-      }
 
       const timeout = new Promise((_, reject) =>
         setTimeout(() => reject(new Error("Zeitüberschreitung beim Laden der Pins.")), 12000)
@@ -55,7 +53,7 @@ export default function Incidents({ profile }) {
     if (!profile?.role) return;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile?.role, location.key]);
+  }, [profile?.role, activeRideoutId, location.key]);
 
   return (
     <div className="page">
@@ -90,7 +88,9 @@ export default function Incidents({ profile }) {
         {loading && <div className="tile">Lade…</div>}
 
         {!loading && rows.length === 0 && !error && (
-          <div className="tile muted">Keine Pins gefunden.</div>
+          <div className="tile muted">
+            {activeRideoutId ? "Keine Pins im aktiven Rideout gefunden." : "Kein aktiver Rideout."}
+          </div>
         )}
 
         {!loading &&

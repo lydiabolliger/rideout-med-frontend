@@ -3,7 +3,7 @@ import { supabase } from "../lib/supabase";
 import { Link, useParams } from "react-router-dom";
 import { severityLabelDe } from "../lib/severity";
 
-export default function Pin() {
+export default function Pin({ activeRideoutId }) {
   const { id } = useParams();
   const [loading, setLoading] = useState(true);
   const [row, setRow] = useState(null);
@@ -15,11 +15,13 @@ export default function Pin() {
     setError(null);
 
     try {
-      const { data, error } = await supabase
+      let q = supabase
         .from("incidents")
-        .select("id, created_at, lat, lng, severity, created_by")
-        .eq("id", id)
-        .maybeSingle();
+        .select("id, created_at, lat, lng, severity, created_by, rideout_id")
+        .eq("id", id);
+      if (activeRideoutId) q = q.eq("rideout_id", activeRideoutId);
+
+      const { data, error } = await q.maybeSingle();
 
       if (error) throw error;
       setRow(data ?? null);
@@ -49,7 +51,7 @@ export default function Pin() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, activeRideoutId]);
 
   return (
     <div className="page">

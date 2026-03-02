@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { severityLabelDe } from "../lib/severity";
 
@@ -47,23 +47,36 @@ export default function Admin({ profile, onProfileUpdated }) {
     users: false,
     analytics: false,
   });
+  const [openRideouts, setOpenRideouts] = useState({});
   const [openIncidents, setOpenIncidents] = useState({});
 
   const [activeRideout, setActiveRideout] = useState(null);
   const [rideoutTitle, setRideoutTitle] = useState("");
   const [rideoutLoading, setRideoutLoading] = useState(false);
+  const [deletingRideoutId, setDeletingRideoutId] = useState(null);
 
   const [profilesLoading, setProfilesLoading] = useState(false);
   const [profilesRows, setProfilesRows] = useState([]);
   const [savingProfileId, setSavingProfileId] = useState(null);
 
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [rideouts, setRideouts] = useState([]);
   const [incidents, setIncidents] = useState([]);
   const [assignmentsByIncident, setAssignmentsByIncident] = useState({});
   const [nameByUserId, setNameByUserId] = useState({});
   const [closingIncidentId, setClosingIncidentId] = useState(null);
 
   const isAdmin = profile?.role === "admin";
+
+  const incidentsByRideout = useMemo(() => {
+    const grouped = {};
+    incidents.forEach((incident) => {
+      const key = incident.rideout_id ?? "__legacy__";
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(incident);
+    });
+    return grouped;
+  }, [incidents]);
 
   const activeRideoutLink = useMemo(() => {
     if (!activeRideout?.join_token) return "";
@@ -72,6 +85,10 @@ export default function Admin({ profile, onProfileUpdated }) {
 
   const toggleSection = (key) => {
     setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const toggleRideout = (rideoutId) => {
+    setOpenRideouts((prev) => ({ ...prev, [rideoutId]: !prev[rideoutId] }));
   };
 
   const toggleIncident = (incidentId) => {
@@ -128,7 +145,6 @@ export default function Admin({ profile, onProfileUpdated }) {
         .select("id, title, join_token, started_at, closed_at")
         .single();
 
-      // Legacy schema compatibility: some environments still require rideout_date (NOT NULL).
       if (insertResult.error?.message?.includes("rideout_date")) {
         insertResult = await supabase
           .from("rideouts")
@@ -146,6 +162,7 @@ export default function Admin({ profile, onProfileUpdated }) {
       setActiveRideout(data);
       setRideoutTitle("");
       setToast("Rideout gestartet.");
+      await loadAnalytics();
     } catch (e) {
       console.warn("[Admin] startRideout failed", e);
       setToast(e?.message ?? "Rideout konnte nicht gestartet werden.");
@@ -169,11 +186,65 @@ export default function Admin({ profile, onProfileUpdated }) {
       localStorage.removeItem(RIDEOUT_TOKEN_STORAGE_KEY);
       setActiveRideout(null);
       setToast("Rideout geschlossen. Link ist nicht mehr gueltig.");
+      await loadAnalytics();
     } catch (e) {
       console.warn("[Admin] closeRideout failed", e);
       setToast(e?.message ?? "Rideout konnte nicht geschlossen werden.");
     } finally {
       setRideoutLoading(false);
+    }
+  };
+
+  const deleteRideout = async (rideout) => {
+    if (!isAdmin || !rideout?.id) return;
+    const confirmDelete = window.confirm(
+      `Rideout "${rideout.title}" inklusive aller zugehörigen Pins und Einsätze löschen?`
+    );
+    if (!confirmDelete) return;
+
+    setDeletingRideoutId(rideout.id);
+    setToast(null);
+    try {
+      const { data: incidentRows, error: incidentRowsErr } = await supabase
+        .from("incidents")
+        .select("id")
+        .eq("rideout_id", rideout.id);
+      if (incidentRowsErr) throw incidentRowsErr;
+
+      const incidentIds = (incidentRows ?? []).map((r) => r.id);
+      if (incidentIds.length > 0) {
+        const { error: assignmentsErr } = await supabase
+          .from("incident_assignments")
+          .delete()
+          .in("incident_id", incidentIds);
+        if (assignmentsErr) throw assignmentsErr;
+
+        const { error: incidentsErr } = await supabase
+          .from("incidents")
+          .delete()
+          .in("id", incidentIds);
+        if (incidentsErr) throw incidentsErr;
+      }
+
+      const { error: rideoutErr } = await supabase
+        .from("rideouts")
+        .delete()
+        .eq("id", rideout.id);
+      if (rideoutErr) throw rideoutErr;
+
+      if (activeRideout?.id === rideout.id) {
+        localStorage.removeItem(RIDEOUT_TOKEN_STORAGE_KEY);
+        setActiveRideout(null);
+      }
+
+      setToast(`Rideout "${rideout.title}" wurde gelöscht.`);
+      await loadActiveRideout();
+      await loadAnalytics();
+    } catch (e) {
+      console.warn("[Admin] deleteRideout failed", e);
+      setToast(e?.message ?? "Rideout konnte nicht gelöscht werden.");
+    } finally {
+      setDeletingRideoutId(null);
     }
   };
 
@@ -251,33 +322,43 @@ export default function Admin({ profile, onProfileUpdated }) {
     setToast(null);
 
     try {
-      const [{ data: incidentsData, error: incidentsErr }, { data: assignmentsData, error: assignmentsErr }, { data: profilesData, error: profilesErr }] =
-        await withTimeout(
-          Promise.all([
-            supabase
-              .from("incidents")
-              .select("id, created_at, closed_at, lat, lng, severity, note, needs_backup, created_by")
-              .order("created_at", { ascending: false })
-              .limit(500),
-            supabase
-              .from("incident_assignments")
-              .select("incident_id, helper_id, joined_at, left_at")
-              .order("joined_at", { ascending: true })
-              .limit(5000),
-            supabase.from("profiles").select("user_id, full_name"),
-          ]),
-          12000,
-          "Zeitüberschreitung beim Laden der Incident-Auswertung."
-        );
+      const [
+        { data: rideoutsData, error: rideoutsErr },
+        { data: incidentsData, error: incidentsErr },
+        { data: assignmentsData, error: assignmentsErr },
+        { data: profilesData, error: profilesErr },
+      ] = await withTimeout(
+        Promise.all([
+          supabase
+            .from("rideouts")
+            .select("id, title, started_at, closed_at, created_by")
+            .order("started_at", { ascending: false })
+            .limit(300),
+          supabase
+            .from("incidents")
+            .select("id, rideout_id, created_at, closed_at, lat, lng, severity, note, needs_backup, created_by")
+            .order("created_at", { ascending: false })
+            .limit(2000),
+          supabase
+            .from("incident_assignments")
+            .select("incident_id, helper_id, joined_at, left_at")
+            .order("joined_at", { ascending: true })
+            .limit(8000),
+          supabase.from("profiles").select("user_id, full_name"),
+        ]),
+        15000,
+        "Zeitüberschreitung beim Laden der Incident-Auswertung."
+      );
 
+      if (rideoutsErr) throw rideoutsErr;
       if (incidentsErr) throw incidentsErr;
       if (assignmentsErr) throw assignmentsErr;
       if (profilesErr) throw profilesErr;
 
-      const grouped = {};
+      const assignmentsGrouped = {};
       (assignmentsData ?? []).forEach((a) => {
-        if (!grouped[a.incident_id]) grouped[a.incident_id] = [];
-        grouped[a.incident_id].push(a);
+        if (!assignmentsGrouped[a.incident_id]) assignmentsGrouped[a.incident_id] = [];
+        assignmentsGrouped[a.incident_id].push(a);
       });
 
       const names = {};
@@ -285,13 +366,15 @@ export default function Admin({ profile, onProfileUpdated }) {
         names[p.user_id] = p.full_name ?? p.user_id;
       });
 
-      setAssignmentsByIncident(grouped);
+      setRideouts(rideoutsData ?? []);
       setIncidents(incidentsData ?? []);
+      setAssignmentsByIncident(assignmentsGrouped);
       setNameByUserId(names);
       setOpenIncidents({});
     } catch (e) {
       console.warn("[Admin] loadAnalytics failed", e);
       setToast(e?.message ?? "Auswertung konnte nicht geladen werden.");
+      setRideouts([]);
       setIncidents([]);
       setAssignmentsByIncident({});
     } finally {
@@ -467,72 +550,110 @@ export default function Admin({ profile, onProfileUpdated }) {
 
         {openSections.analytics && (
           <div className="list" style={{ marginTop: 10 }}>
-            {incidents.map((incident) => {
-              const isOpen = !!openIncidents[incident.id];
-              const assignments = assignmentsByIncident[incident.id] ?? [];
-              const endCandidates = assignments
-                .map((a) => a.left_at || a.joined_at)
-                .filter(Boolean)
-                .map((iso) => new Date(iso).getTime())
-                .filter(Number.isFinite);
-              const fallbackEnd = endCandidates.length
-                ? new Date(Math.max(...endCandidates)).toISOString()
-                : null;
-              const incidentEndIso = incident.closed_at || fallbackEnd || new Date().toISOString();
-              const incidentDurationMs = msBetween(incident.created_at, incidentEndIso);
-
+            {rideouts.map((rideout) => {
+              const rideoutIncidentList = incidentsByRideout[rideout.id] ?? [];
+              const isRideoutOpen = !!openRideouts[rideout.id];
+              const isDeleting = deletingRideoutId === rideout.id;
               return (
-                <div className="kv" key={incident.id}>
+                <div className="kv" key={rideout.id}>
                   <div className="row row--between">
-                    <div className="kv__v">Incident {incident.id.slice(0, 8)}</div>
+                    <div>
+                      <div className="kv__v">{rideout.title}</div>
+                      <div className="mutedTiny">
+                        {fmtDate(rideout.started_at)}{rideout.closed_at ? ` bis ${fmtDate(rideout.closed_at)}` : " (aktiv)"}
+                      </div>
+                    </div>
                     <div className="row">
-                      <span className="badge">{severityLabelDe(incident.severity)}</span>
-                      <button className="btn" type="button" onClick={() => toggleIncident(incident.id)}>
-                        {isOpen ? "Zuklappen" : "Aufklappen"}
+                      <button className="btn" type="button" onClick={() => toggleRideout(rideout.id)}>
+                        {isRideoutOpen ? "Zuklappen" : "Aufklappen"}
+                      </button>
+                      <button
+                        className="btn"
+                        type="button"
+                        onClick={() => deleteRideout(rideout)}
+                        disabled={isDeleting}
+                      >
+                        {isDeleting ? "Lösche..." : "Rideout löschen"}
                       </button>
                     </div>
                   </div>
 
-                  {isOpen && (
-                    <div className="stack" style={{ gap: 8, marginTop: 10 }}>
-                      <div className="mutedSmall">
-                        Wann: {fmtDate(incident.created_at)}{incident.closed_at ? ` bis ${fmtDate(incident.closed_at)}` : " (offen)"}
-                      </div>
-                      <div className="mutedSmall">
-                        Wo: {Number(incident.lat).toFixed(5)}, {Number(incident.lng).toFixed(5)}
-                      </div>
-                      <div className="mutedSmall">
-                        Dauer gesamt: {fmtDuration(incidentDurationMs)}
-                      </div>
-                      <div className="mutedSmall">
-                        Verstärkung benötigt: {incident.needs_backup ? "Ja" : "Nein"}
-                      </div>
-                      {incident.note ? <div className="mutedSmall">Notiz: {incident.note}</div> : null}
-
-                      <div className="mutedTiny">Wer war da:</div>
-                      {assignments.length === 0 ? (
-                        <div className="mutedSmall">Keine Einsaetze zugeordnet.</div>
+                  {isRideoutOpen && (
+                    <div className="stack" style={{ marginTop: 10, gap: 8 }}>
+                      {rideoutIncidentList.length === 0 ? (
+                        <div className="mutedSmall">Keine Pins in diesem Rideout.</div>
                       ) : (
-                        assignments.map((a, idx) => {
-                          const leaveIso = a.left_at || incident.closed_at || new Date().toISOString();
-                          const durationMs = msBetween(a.joined_at, leaveIso);
+                        rideoutIncidentList.map((incident, index) => {
+                          const isIncidentOpen = !!openIncidents[incident.id];
+                          const assignments = assignmentsByIncident[incident.id] ?? [];
+                          const endCandidates = assignments
+                            .map((a) => a.left_at || a.joined_at)
+                            .filter(Boolean)
+                            .map((iso) => new Date(iso).getTime())
+                            .filter(Number.isFinite);
+                          const fallbackEnd = endCandidates.length
+                            ? new Date(Math.max(...endCandidates)).toISOString()
+                            : null;
+                          const incidentEndIso = incident.closed_at || fallbackEnd || new Date().toISOString();
+                          const incidentDurationMs = msBetween(incident.created_at, incidentEndIso);
+
                           return (
-                            <div key={`${a.helper_id}-${a.joined_at}-${idx}`} className="mutedSmall">
-                              {nameByUserId[a.helper_id] ?? a.helper_id} | von {fmtDate(a.joined_at)} bis {a.left_at ? fmtDate(a.left_at) : "offen"} | {fmtDuration(durationMs)}
+                            <div className="card" key={incident.id} style={{ padding: 10 }}>
+                              <div className="row row--between">
+                                <div className="kv__v">
+                                  Incident {index + 1} · {severityLabelDe(incident.severity)}
+                                </div>
+                                <button className="btn" type="button" onClick={() => toggleIncident(incident.id)}>
+                                  {isIncidentOpen ? "Zuklappen" : "Aufklappen"}
+                                </button>
+                              </div>
+
+                              {isIncidentOpen && (
+                                <div className="stack" style={{ marginTop: 8, gap: 6 }}>
+                                  <div className="mutedSmall">
+                                    Wann: {fmtDate(incident.created_at)}{incident.closed_at ? ` bis ${fmtDate(incident.closed_at)}` : " (offen)"}
+                                  </div>
+                                  <div className="mutedSmall">
+                                    Wo: {Number(incident.lat).toFixed(5)}, {Number(incident.lng).toFixed(5)}
+                                  </div>
+                                  <div className="mutedSmall">
+                                    Dauer gesamt: {fmtDuration(incidentDurationMs)}
+                                  </div>
+                                  <div className="mutedSmall">
+                                    Verstärkung benötigt: {incident.needs_backup ? "Ja" : "Nein"}
+                                  </div>
+                                  {incident.note ? <div className="mutedSmall">Notiz: {incident.note}</div> : null}
+
+                                  <div className="mutedTiny">Wer war da:</div>
+                                  {assignments.length === 0 ? (
+                                    <div className="mutedSmall">Keine Einsaetze zugeordnet.</div>
+                                  ) : (
+                                    assignments.map((a, idx) => {
+                                      const leaveIso = a.left_at || incident.closed_at || new Date().toISOString();
+                                      const durationMs = msBetween(a.joined_at, leaveIso);
+                                      return (
+                                        <div key={`${a.helper_id}-${a.joined_at}-${idx}`} className="mutedSmall">
+                                          {nameByUserId[a.helper_id] ?? a.helper_id} | von {fmtDate(a.joined_at)} bis {a.left_at ? fmtDate(a.left_at) : "offen"} | {fmtDuration(durationMs)}
+                                        </div>
+                                      );
+                                    })
+                                  )}
+
+                                  {!incident.closed_at && (
+                                    <button
+                                      className="btn"
+                                      type="button"
+                                      onClick={() => closeIncident(incident.id)}
+                                      disabled={closingIncidentId === incident.id}
+                                    >
+                                      {closingIncidentId === incident.id ? "Schliesse..." : "Incident schliessen"}
+                                    </button>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           );
                         })
-                      )}
-
-                      {!incident.closed_at && (
-                        <button
-                          className="btn"
-                          type="button"
-                          onClick={() => closeIncident(incident.id)}
-                          disabled={closingIncidentId === incident.id}
-                        >
-                          {closingIncidentId === incident.id ? "Schliesse..." : "Incident schliessen"}
-                        </button>
                       )}
                     </div>
                   )}
@@ -540,8 +661,8 @@ export default function Admin({ profile, onProfileUpdated }) {
               );
             })}
 
-            {!analyticsLoading && incidents.length === 0 && (
-              <div className="mutedSmall">Keine Incident-Daten vorhanden.</div>
+            {!analyticsLoading && rideouts.length === 0 && (
+              <div className="mutedSmall">Keine Rideouts vorhanden.</div>
             )}
           </div>
         )}

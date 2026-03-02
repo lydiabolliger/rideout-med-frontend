@@ -88,7 +88,7 @@ function msToHuman(ms) {
   return `${s}s`;
 }
 
-export default function Dashboard({ profile }) {
+export default function Dashboard({ profile, activeRideoutId }) {
   const [me, setMe] = useState(null);
 
   // Status nur für Helfer sinnvoll – Admin darf trotzdem melden
@@ -431,9 +431,15 @@ useEffect(() => {
 
   // ---------- Incidents: load + realtime ----------
   const loadIncidents = useCallback(async () => {
+    if (!activeRideoutId) {
+      setIncidents([]);
+      return;
+    }
+
     const { data, error } = await supabase
       .from("incidents")
-      .select("id, created_at, lat, lng, severity, needs_backup, created_by, closed_at, note")
+      .select("id, created_at, lat, lng, severity, needs_backup, created_by, closed_at, note, rideout_id")
+      .eq("rideout_id", activeRideoutId)
       .order("created_at", { ascending: false })
       .limit(200);
 
@@ -442,7 +448,7 @@ useEffect(() => {
       return;
     }
     setIncidents(data ?? []);
-  }, []);
+  }, [activeRideoutId]);
 
   useEffect(() => {
     let alive = true;
@@ -535,6 +541,7 @@ useEffect(() => {
 
   useEffect(() => {
     if (!me?.id) return;
+    if (!activeRideoutId) return;
 
     let alive = true;
     const channel = supabase
@@ -546,6 +553,7 @@ useEffect(() => {
           if (!alive) return;
           const incident = payload.new;
           if (!incident) return;
+          if (incident.rideout_id !== activeRideoutId) return;
 
           const msg = `Neuer Incident (${severityLabelDe(incident.severity)}) · Verstärkung: ${incident.needs_backup ? "Ja" : "Nein"}`;
           setToast(msg);
@@ -561,7 +569,7 @@ useEffect(() => {
       alive = false;
       supabase.removeChannel(channel);
     };
-  }, [me?.id]);
+  }, [me?.id, activeRideoutId]);
 
   // ---------- Actions ----------
   const toggleMyStatus = async () => {
@@ -596,6 +604,10 @@ useEffect(() => {
       setToast("Nicht eingeloggt.");
       return;
     }
+    if (!activeRideoutId) {
+      setToast("Kein aktiver Rideout.");
+      return;
+    }
     if (!canUseLocation) {
       setToast("Geolocation nicht verfügbar.");
       return;
@@ -620,6 +632,7 @@ useEffect(() => {
         severity: mapSeverityToDb(severityUI), // ✅ minor | medium | severe
         created_by: me.id,
         needs_backup: needsBackup === "yes",
+        rideout_id: activeRideoutId,
       };
 
       const { error } = await supabase.from("incidents").insert(payload);
