@@ -36,6 +36,10 @@ function getStoredRideoutToken() {
   return localStorage.getItem(RIDEOUT_TOKEN_STORAGE_KEY);
 }
 
+function hasStoredRideoutToken() {
+  return !!getStoredRideoutToken();
+}
+
 function ProtectedRoute({ session, loading }) {
   if (loading) {
     return (
@@ -176,12 +180,33 @@ export default function App() {
         if (!mounted) return;
 
         const sess = data?.session ?? null;
-        setSession(sess);
-
         if (sess?.user?.id) {
+          setSession(sess);
           fetchProfile(sess.user);
         } else {
-          setProfile(null);
+          // Rideout links should work without email login: create anonymous session automatically.
+          const tokenExists = hasStoredRideoutToken();
+          if (tokenExists) {
+            try {
+              const { data: anonData, error: anonErr } = await withTimeout(
+                supabase.auth.signInAnonymously(),
+                APP_REQUEST_TIMEOUT_MS,
+                "Anonymous sign-in timeout"
+              );
+              if (anonErr) throw anonErr;
+              const anonSession = anonData?.session ?? null;
+              setSession(anonSession);
+              if (anonSession?.user?.id) fetchProfile(anonSession.user);
+              else setProfile(null);
+            } catch (anonE) {
+              console.warn("[App] anonymous sign-in failed", anonE);
+              setSession(null);
+              setProfile(null);
+            }
+          } else {
+            setSession(null);
+            setProfile(null);
+          }
         }
       } catch (e) {
         console.warn("[App] init catch", e);
