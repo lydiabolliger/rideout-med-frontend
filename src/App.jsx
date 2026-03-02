@@ -142,6 +142,11 @@ export default function App() {
           user?.user_metadata?.full_name ??
           user?.user_metadata?.name ??
           (user?.email ? String(user.email).split("@")[0] : null);
+        const fallbackProfile = {
+          user_id: userId,
+          full_name: fallbackName,
+          role: "helper",
+        };
 
         const { data: created, error: createErr } = await withTimeout(
           supabase
@@ -159,12 +164,26 @@ export default function App() {
           APP_REQUEST_TIMEOUT_MS,
           "Profile create timeout"
         );
-        if (createErr) throw createErr;
+        if (createErr) {
+          console.warn("[App] profile create failed, using local fallback", createErr);
+          if (mounted) setProfile(fallbackProfile);
+          return;
+        }
 
         if (mounted) setProfile(created ?? null);
       } catch (e) {
         console.warn("[App] profile catch", e);
-        if (mounted) setProfile(null);
+        const fallbackName =
+          user?.user_metadata?.full_name ??
+          user?.user_metadata?.name ??
+          (user?.email ? String(user.email).split("@")[0] : null);
+        if (mounted) {
+          setProfile({
+            user_id: userId,
+            full_name: fallbackName,
+            role: "helper",
+          });
+        }
       }
     };
 

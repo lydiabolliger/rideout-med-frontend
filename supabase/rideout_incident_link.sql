@@ -116,3 +116,46 @@ using (
     where p.user_id = auth.uid() and p.role = 'admin'
   )
 );
+
+drop policy if exists "helper_locations_select_authenticated" on public.helper_locations;
+create policy "helper_locations_select_authenticated"
+on public.helper_locations
+for select
+to authenticated
+using (true);
+
+drop policy if exists "helper_locations_insert_self_or_admin" on public.helper_locations;
+create policy "helper_locations_insert_self_or_admin"
+on public.helper_locations
+for insert
+to authenticated
+with check (
+  user_id = auth.uid()
+  or exists (
+    select 1
+    from public.profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+);
+
+drop policy if exists "helper_locations_update_self_or_admin" on public.helper_locations;
+create policy "helper_locations_update_self_or_admin"
+on public.helper_locations
+for update
+to authenticated
+using (
+  user_id = auth.uid()
+  or exists (
+    select 1
+    from public.profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+)
+with check (
+  user_id = auth.uid()
+  or exists (
+    select 1
+    from public.profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+);

@@ -336,6 +336,12 @@ useEffect(() => {
 
     const loadHelpers = async () => {
       try {
+        const { data: participants, error: partErr } = await supabase
+          .from("rideout_helpers")
+          .select("helper_id")
+          .eq("rideout_id", activeRideoutId);
+        if (partErr) throw partErr;
+
         const { data: profs, error: pErr } = await supabase
           .from("profiles")
           .select("user_id, full_name, role")
@@ -347,18 +353,36 @@ useEffect(() => {
           .select("user_id, lat, lng, status, updated_at");
         if (lErr) throw lErr;
 
+        const profileMap = new Map((profs ?? []).map((p) => [p.user_id, p]));
         const locMap = new Map((locs ?? []).map((x) => [x.user_id, x]));
-        const merged =
-          (profs ?? []).map((p) => {
-            const loc = locMap.get(p.user_id);
-            return {
-              ...p,
-              lat: loc?.lat ?? null,
-              lng: loc?.lng ?? null,
-              status: loc?.status ?? "free",
-              updated_at: loc?.updated_at ?? null,
-            };
-          }) ?? [];
+        const participantIds = (participants ?? []).map((p) => p.helper_id).filter(Boolean);
+        const userIds = new Set([
+          ...participantIds,
+          ...Array.from(profileMap.keys()),
+          ...Array.from(locMap.keys()),
+        ]);
+
+        const merged = Array.from(userIds).map((userId) => {
+          const p = profileMap.get(userId);
+          const loc = locMap.get(userId);
+          return {
+            user_id: userId,
+            full_name: p?.full_name ?? "Unbenannter Helfer",
+            role: p?.role ?? "helper",
+            lat: loc?.lat ?? null,
+            lng: loc?.lng ?? null,
+            status: loc?.status ?? "free",
+            updated_at: loc?.updated_at ?? null,
+          };
+        });
+
+        // Stable order for UI: with location first, then by display name.
+        merged.sort((a, b) => {
+          const aHasLoc = a.lat != null && a.lng != null;
+          const bHasLoc = b.lat != null && b.lng != null;
+          if (aHasLoc !== bHasLoc) return aHasLoc ? -1 : 1;
+          return String(a.full_name ?? "").localeCompare(String(b.full_name ?? ""), "de");
+        });
 
         if (alive) setHelpers(merged);
       } catch (e) {
@@ -371,6 +395,14 @@ useEffect(() => {
 
     channel = supabase
       .channel("helpers-live")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "rideout_helpers" },
+        () => {
+          if (!alive) return;
+          loadHelpers();
+        }
+      )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "helper_locations" },
