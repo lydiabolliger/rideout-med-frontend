@@ -45,3 +45,16 @@ with check (
     where p.user_id = auth.uid() and p.role = 'admin'
   )
 );
+
+drop policy if exists "profiles_delete_admin" on public.profiles;
+create policy "profiles_delete_admin"
+on public.profiles
+for delete
+to authenticated
+using (
+  exists (
+    select 1
+    from public.profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+);

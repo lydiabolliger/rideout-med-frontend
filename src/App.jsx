@@ -11,6 +11,7 @@ import Pin from "./pages/Pin.jsx";
 import Profile from "./pages/Profile.jsx";
 
 const RIDEOUT_TOKEN_STORAGE_KEY = "rideout_join_token";
+const RIDEOUT_TOKEN_FRESH_KEY = "rideout_join_token_fresh";
 const APP_REQUEST_TIMEOUT_MS = 12000;
 
 function withTimeout(promise, ms = APP_REQUEST_TIMEOUT_MS, message = "Request timeout") {
@@ -26,6 +27,7 @@ function storeRideoutTokenFromUrl() {
   const token = url.searchParams.get("rideout");
   if (!token) return null;
   localStorage.setItem(RIDEOUT_TOKEN_STORAGE_KEY, token);
+  sessionStorage.setItem(RIDEOUT_TOKEN_FRESH_KEY, token);
   url.searchParams.delete("rideout");
   window.history.replaceState({}, "", url.toString());
   return token;
@@ -38,6 +40,14 @@ function getStoredRideoutToken() {
 
 function hasStoredRideoutToken() {
   return !!getStoredRideoutToken();
+}
+
+function consumeFreshRideoutToken(token) {
+  if (typeof window === "undefined") return false;
+  const fresh = sessionStorage.getItem(RIDEOUT_TOKEN_FRESH_KEY);
+  if (!fresh || !token || fresh !== token) return false;
+  sessionStorage.removeItem(RIDEOUT_TOKEN_FRESH_KEY);
+  return true;
 }
 
 function ProtectedRoute({ session, loading }) {
@@ -342,8 +352,54 @@ export default function App() {
         setActiveRideoutId(null);
         setHasRideoutAccess(false);
       } else {
-        setActiveRideoutId(data?.id ?? null);
-        setHasRideoutAccess(!!data?.id);
+        const rideoutId = data?.id ?? null;
+        if (!rideoutId) {
+          setActiveRideoutId(null);
+          setHasRideoutAccess(false);
+          setRideoutAccessLoading(false);
+          return;
+        }
+
+        let kicked = false;
+        try {
+          const { data: kickRow, error: kickErr } = await withTimeout(
+            supabase
+              .from("rideout_kicks")
+              .select("rideout_id, user_id")
+              .eq("rideout_id", rideoutId)
+              .eq("user_id", session.user.id)
+              .maybeSingle(),
+            APP_REQUEST_TIMEOUT_MS,
+            "Rideout kick check timeout"
+          );
+          if (kickErr) throw kickErr;
+          kicked = !!kickRow;
+        } catch (kickCheckErr) {
+          console.warn("[App] rideout kick check failed", kickCheckErr);
+        }
+
+        if (kicked) {
+          const freshViaUrl = consumeFreshRideoutToken(token);
+          if (freshViaUrl) {
+            try {
+              await withTimeout(
+                supabase
+                  .from("rideout_kicks")
+                  .delete()
+                  .eq("rideout_id", rideoutId)
+                  .eq("user_id", session.user.id),
+                APP_REQUEST_TIMEOUT_MS,
+                "Rideout kick clear timeout"
+              );
+              kicked = false;
+            } catch (kickClearErr) {
+              console.warn("[App] rideout kick clear failed", kickClearErr);
+            }
+          }
+        }
+
+        setActiveRideoutId(kicked ? null : rideoutId);
+        setHasRideoutAccess(!kicked);
       }
       setRideoutAccessLoading(false);
     };

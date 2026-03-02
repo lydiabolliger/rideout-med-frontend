@@ -20,6 +20,18 @@ create index if not exists rideout_helpers_rideout_idx
 
 alter table public.rideout_helpers enable row level security;
 
+create table if not exists public.rideout_kicks (
+  rideout_id uuid not null references public.rideouts(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  kicked_at timestamptz not null default now(),
+  primary key (rideout_id, user_id)
+);
+
+create index if not exists rideout_kicks_rideout_idx
+  on public.rideout_kicks (rideout_id);
+
+alter table public.rideout_kicks enable row level security;
+
 drop policy if exists "rideout_helpers_select_authenticated" on public.rideout_helpers;
 create policy "rideout_helpers_select_authenticated"
 on public.rideout_helpers
@@ -70,6 +82,47 @@ for delete
 to authenticated
 using (
   exists (
+    select 1
+    from public.profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+);
+
+drop policy if exists "rideout_kicks_select_self_or_admin" on public.rideout_kicks;
+create policy "rideout_kicks_select_self_or_admin"
+on public.rideout_kicks
+for select
+to authenticated
+using (
+  user_id = auth.uid()
+  or exists (
+    select 1
+    from public.profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+);
+
+drop policy if exists "rideout_kicks_insert_admin" on public.rideout_kicks;
+create policy "rideout_kicks_insert_admin"
+on public.rideout_kicks
+for insert
+to authenticated
+with check (
+  exists (
+    select 1
+    from public.profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+);
+
+drop policy if exists "rideout_kicks_delete_self_or_admin" on public.rideout_kicks;
+create policy "rideout_kicks_delete_self_or_admin"
+on public.rideout_kicks
+for delete
+to authenticated
+using (
+  user_id = auth.uid()
+  or exists (
     select 1
     from public.profiles p
     where p.user_id = auth.uid() and p.role = 'admin'

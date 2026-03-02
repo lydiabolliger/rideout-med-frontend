@@ -58,6 +58,7 @@ export default function Admin({ profile, onProfileUpdated }) {
   const [profilesLoading, setProfilesLoading] = useState(false);
   const [profilesRows, setProfilesRows] = useState([]);
   const [savingProfileId, setSavingProfileId] = useState(null);
+  const [removingProfileId, setRemovingProfileId] = useState(null);
 
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [rideouts, setRideouts] = useState([]);
@@ -288,16 +289,51 @@ export default function Admin({ profile, onProfileUpdated }) {
     if (!isAdmin) return;
     setProfilesLoading(true);
     try {
-      const { data, error } = await withTimeout(
-        supabase
-          .from("profiles")
-          .select("user_id, full_name, role")
-          .order("full_name", { ascending: true, nullsFirst: false }),
+      const [
+        { data: profileData, error: profileErr },
+        { data: helperLocData, error: helperLocErr },
+        { data: helperRideoutData, error: helperRideoutErr },
+      ] = await withTimeout(
+        Promise.all([
+          supabase.from("profiles").select("user_id, full_name, role"),
+          supabase.from("helper_locations").select("user_id"),
+          activeRideout?.id
+            ? supabase.from("rideout_helpers").select("helper_id").eq("rideout_id", activeRideout.id)
+            : supabase.from("rideout_helpers").select("helper_id"),
+        ]),
         12000,
         "Zeitüberschreitung beim Laden der Benutzerverwaltung."
       );
-      if (error) throw error;
-      setProfilesRows(data ?? []);
+      if (profileErr) throw profileErr;
+      if (helperLocErr) throw helperLocErr;
+      if (helperRideoutErr) throw helperRideoutErr;
+
+      const profileMap = new Map((profileData ?? []).map((p) => [p.user_id, p]));
+      const ids = new Set([
+        ...Array.from(profileMap.keys()),
+        ...(helperLocData ?? []).map((h) => h.user_id).filter(Boolean),
+        ...(helperRideoutData ?? []).map((h) => h.helper_id).filter(Boolean),
+      ]);
+
+      const merged = Array.from(ids).map((userId) => {
+        const p = profileMap.get(userId);
+        return {
+          user_id: userId,
+          full_name: p?.full_name ?? "",
+          role: p?.role ?? "helper",
+        };
+      });
+
+      merged.sort((a, b) => {
+        const an = String(a.full_name ?? "").trim();
+        const bn = String(b.full_name ?? "").trim();
+        if (an && bn) return an.localeCompare(bn, "de");
+        if (an && !bn) return -1;
+        if (!an && bn) return 1;
+        return String(a.user_id).localeCompare(String(b.user_id), "de");
+      });
+
+      setProfilesRows(merged);
     } catch (e) {
       console.warn("[Admin] loadProfiles failed", e);
       setToast(e?.message ?? "Profile konnten nicht geladen werden.");
@@ -338,6 +374,58 @@ export default function Admin({ profile, onProfileUpdated }) {
       setToast(e?.message ?? "Profil konnte nicht gespeichert werden.");
     } finally {
       setSavingProfileId(null);
+    }
+  };
+
+  const removeHelperRow = async (row) => {
+    if (!isAdmin || !row?.user_id) return;
+    const confirmed = window.confirm(
+      "Helfer wirklich entfernen? Der Helfer muss danach den Rideout-Link neu anklicken."
+    );
+    if (!confirmed) return;
+
+    setRemovingProfileId(row.user_id);
+    setToast(null);
+    try {
+      if (activeRideout?.id) {
+        const { error: kickErr } = await supabase.from("rideout_kicks").upsert(
+          {
+            rideout_id: activeRideout.id,
+            user_id: row.user_id,
+            kicked_at: new Date().toISOString(),
+          },
+          { onConflict: "rideout_id,user_id" }
+        );
+        if (kickErr) throw kickErr;
+
+        const { error: activeRideoutDeleteErr } = await supabase
+          .from("rideout_helpers")
+          .delete()
+          .eq("rideout_id", activeRideout.id)
+          .eq("helper_id", row.user_id);
+        if (activeRideoutDeleteErr) throw activeRideoutDeleteErr;
+      }
+
+      const { error: helperLocDeleteErr } = await supabase
+        .from("helper_locations")
+        .delete()
+        .eq("user_id", row.user_id);
+      if (helperLocDeleteErr) throw helperLocDeleteErr;
+
+      const { error: profileDeleteErr } = await supabase
+        .from("profiles")
+        .delete()
+        .eq("user_id", row.user_id);
+      if (profileDeleteErr) throw profileDeleteErr;
+
+      setToast("Helfer entfernt. Er muss den Rideout-Link neu öffnen.");
+      await loadProfiles();
+      await loadAnalytics();
+    } catch (e) {
+      console.warn("[Admin] removeHelperRow failed", e);
+      setToast(e?.message ?? "Helfer konnte nicht entfernt werden.");
+    } finally {
+      setRemovingProfileId(null);
     }
   };
 
@@ -564,6 +652,14 @@ export default function Admin({ profile, onProfileUpdated }) {
                     disabled={savingProfileId === r.user_id}
                   >
                     {savingProfileId === r.user_id ? "Speichere..." : "Speichern"}
+                  </button>
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={() => removeHelperRow(r)}
+                    disabled={removingProfileId === r.user_id || r.role === "admin"}
+                  >
+                    {removingProfileId === r.user_id ? "Entferne..." : "Helfer entfernen"}
                   </button>
                 </div>
               </div>
