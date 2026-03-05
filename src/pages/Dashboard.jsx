@@ -110,6 +110,7 @@ export default function Dashboard({ profile, activeRideoutId }) {
 
   const [helpers, setHelpers] = useState([]); // merged profiles + locations
   const [incidents, setIncidents] = useState([]);
+  const [myCoords, setMyCoords] = useState(null); // { lat, lng, ts }
 
   const [toast, setToast] = useState(null);
 
@@ -131,6 +132,7 @@ export default function Dashboard({ profile, activeRideoutId }) {
   const incidentMarkersRef = useRef(new Map());
   const openHelperPopupUserIdRef = useRef(null);
   const suppressHelperPopupCloseRef = useRef(false);
+  const seenIncidentIdsRef = useRef(new Set());
 
   const canUseLocation = useMemo(
     () => typeof navigator !== "undefined" && !!navigator.geolocation,
@@ -530,6 +532,7 @@ useEffect(() => {
 
     const upsertLocation = async (lat, lng, status) => {
       try {
+        setMyCoords({ lat, lng, ts: Date.now() });
         await supabase.from("helper_locations").upsert(
           {
             user_id: me.id,
@@ -583,9 +586,25 @@ useEffect(() => {
 
     if (error) {
       console.warn("[Dashboard] loadIncidents error", error);
+      setToast(error?.message ?? "Fehler beim Laden der Incidents.");
       return;
     }
-    setIncidents(data ?? []);
+
+    const nextRows = data ?? [];
+    const prevIds = seenIncidentIdsRef.current;
+    const nextIds = new Set(nextRows.map((r) => r.id));
+    const newRows = nextRows.filter((r) => !prevIds.has(r.id));
+
+    // In-app notification fallback even when browser notifications are blocked.
+    if (prevIds.size > 0 && newRows.length > 0) {
+      const first = newRows[0];
+      setToast(
+        `Neuer Incident (${severityLabelDe(first.severity)}) · Verstärkung: ${first.needs_backup ? "Ja" : "Nein"}`
+      );
+    }
+
+    seenIncidentIdsRef.current = nextIds;
+    setIncidents(nextRows);
   }, [activeRideoutId]);
 
   useEffect(() => {
@@ -781,16 +800,46 @@ useEffect(() => {
 
     setSubmitting(true);
     try {
-      const pos = await new Promise((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: true,
-          maximumAge: 5000,
-          timeout: 15000,
-        });
-      });
+      let lat = null;
+      let lng = null;
 
-      const lat = pos.coords.latitude;
-      const lng = pos.coords.longitude
+      const isFreshCoords =
+        !!myCoords &&
+        Number.isFinite(myCoords.lat) &&
+        Number.isFinite(myCoords.lng) &&
+        Date.now() - myCoords.ts < 60000;
+
+      if (isFreshCoords) {
+        lat = myCoords.lat;
+        lng = myCoords.lng;
+      } else {
+        try {
+          const pos = await new Promise((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(resolve, reject, {
+              enableHighAccuracy: true,
+              maximumAge: 10000,
+              timeout: 7000,
+            });
+          });
+          lat = pos.coords.latitude;
+          lng = pos.coords.longitude;
+          setMyCoords({ lat, lng, ts: Date.now() });
+        } catch {
+          const { data: lastLoc } = await supabase
+            .from("helper_locations")
+            .select("lat, lng, updated_at")
+            .eq("user_id", me.id)
+            .maybeSingle();
+          if (Number.isFinite(lastLoc?.lat) && Number.isFinite(lastLoc?.lng)) {
+            lat = Number(lastLoc.lat);
+            lng = Number(lastLoc.lng);
+          }
+        }
+      }
+
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        throw new Error("Kein Standort verfügbar. Bitte Standortfreigabe prüfen.");
+      }
 
       const payload = {
         lat,
