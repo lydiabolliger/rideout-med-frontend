@@ -88,11 +88,25 @@ function msToHuman(ms) {
   return `${s}s`;
 }
 
+function shortUserId(id) {
+  if (!id) return "ohne-id";
+  const v = String(id);
+  if (v.length <= 8) return v;
+  return `${v.slice(0, 8)}…`;
+}
+
+function helperDisplayName(helper) {
+  const name = String(helper?.full_name ?? "").trim();
+  if (name.length > 0 && name.toLowerCase() !== "unbenannter helfer") return name;
+  return `Helfer ${shortUserId(helper?.user_id)}`;
+}
+
 export default function Dashboard({ profile, activeRideoutId }) {
   const [me, setMe] = useState(null);
 
   // Status nur für Helfer sinnvoll – Admin darf trotzdem melden
   const [myStatus, setMyStatus] = useState("free");
+  const [shareMyLocation, setShareMyLocation] = useState(false); // for admin: optional live location
 
   const [helpers, setHelpers] = useState([]); // merged profiles + locations
   const [incidents, setIncidents] = useState([]);
@@ -113,6 +127,8 @@ export default function Dashboard({ profile, activeRideoutId }) {
   const mapRef = useRef(null);
   const helpersLayerRef = useRef(null);
   const incidentsLayerRef = useRef(null);
+  const helperMarkersRef = useRef(new Map());
+  const incidentMarkersRef = useRef(new Map());
   const openHelperPopupUserIdRef = useRef(null);
   const suppressHelperPopupCloseRef = useRef(false);
 
@@ -122,6 +138,7 @@ export default function Dashboard({ profile, activeRideoutId }) {
   );
 
   const isHelper = useMemo(() => profile?.role !== "admin", [profile?.role]);
+  const shouldTrackLocation = isHelper || shareMyLocation;
 
   // ---------- Tick für Live-Dauer ----------
   useEffect(() => {
@@ -205,21 +222,23 @@ useEffect(() => {
 
     suppressHelperPopupCloseRef.current = true;
     layer.clearLayers();
+    helperMarkersRef.current = new Map();
 
     helpers.forEach((h) => {
       if (h.lat == null || h.lng == null) return;
 
+      const isAdminRole = h.role === "admin";
       const busy = h.status === "busy";
       const marker = L.circleMarker([h.lat, h.lng], {
         radius: 8,
-        color: busy ? "#ff4d4d" : "#37d67a",
+        color: isAdminRole ? "#60a5fa" : busy ? "#ff4d4d" : "#37d67a",
         weight: 3,
         fillColor: "#111",
         fillOpacity: 0.85,
       });
 
       marker.bindPopup(
-        `<b>${h.full_name ?? "Helfer"}</b><br/>Status: ${busy ? "im Einsatz" : "frei"}`
+        `<b>${helperDisplayName(h)}</b><br/>Rolle: ${isAdminRole ? "admin" : "helfer"}<br/>ID: ${h.user_id ? shortUserId(h.user_id) : "unbekannt"}<br/>Status: ${busy ? "im Einsatz" : "frei"}`
       );
 
       marker.on("popupopen", () => {
@@ -233,6 +252,7 @@ useEffect(() => {
       });
 
       layer.addLayer(marker);
+      if (h.user_id) helperMarkersRef.current.set(h.user_id, marker);
 
       // Keep helper popup open across live location redraws; user closes it explicitly with X.
       if (openHelperPopupUserIdRef.current && openHelperPopupUserIdRef.current === h.user_id) {
@@ -248,6 +268,7 @@ useEffect(() => {
   if (!layer) return;
 
   layer.clearLayers();
+  incidentMarkersRef.current = new Map();
 
   incidents.forEach((i, index) => {
     if (i.lat == null || i.lng == null) return;
@@ -319,6 +340,7 @@ useEffect(() => {
     });
 
     layer.addLayer(marker);
+    incidentMarkersRef.current.set(i.id, marker);
   });
 }, [incidents, me?.id, submitting, activeAssignment?.incident_id]);
 
@@ -344,8 +366,7 @@ useEffect(() => {
 
         const { data: profs, error: pErr } = await supabase
           .from("profiles")
-          .select("user_id, full_name, role")
-          .neq("role", "admin");
+          .select("user_id, full_name, role");
         if (pErr) throw pErr;
 
         const { data: locs, error: lErr } = await supabase
@@ -353,9 +374,19 @@ useEffect(() => {
           .select("user_id, lat, lng, status, updated_at");
         if (lErr) throw lErr;
 
-        const profileMap = new Map((profs ?? []).map((p) => [p.user_id, p]));
-        const locMap = new Map((locs ?? []).map((x) => [x.user_id, x]));
-        const participantIds = (participants ?? []).map((p) => p.helper_id).filter(Boolean);
+        const profileMap = new Map(
+          (profs ?? [])
+            .filter((p) => p?.user_id)
+            .map((p) => [p.user_id, p])
+        );
+        const locMap = new Map(
+          (locs ?? [])
+            .filter((x) => x?.user_id)
+            .map((x) => [x.user_id, x])
+        );
+        const participantIds = (participants ?? [])
+          .map((p) => p?.helper_id)
+          .filter((id) => typeof id === "string" && id.length > 0);
         const userIds = new Set([
           ...participantIds,
           ...Array.from(profileMap.keys()),
@@ -367,7 +398,7 @@ useEffect(() => {
           const loc = locMap.get(userId);
           return {
             user_id: userId,
-            full_name: p?.full_name ?? "Unbenannter Helfer",
+            full_name: p?.full_name ?? "",
             role: p?.role ?? "helper",
             lat: loc?.lat ?? null,
             lng: loc?.lng ?? null,
@@ -376,15 +407,20 @@ useEffect(() => {
           };
         });
 
+        const filtered = merged.filter((h) => {
+          if (!h?.user_id) return false;
+          return true;
+        });
+
         // Stable order for UI: with location first, then by display name.
-        merged.sort((a, b) => {
+        filtered.sort((a, b) => {
           const aHasLoc = a.lat != null && a.lng != null;
           const bHasLoc = b.lat != null && b.lng != null;
           if (aHasLoc !== bHasLoc) return aHasLoc ? -1 : 1;
           return String(a.full_name ?? "").localeCompare(String(b.full_name ?? ""), "de");
         });
 
-        if (alive) setHelpers(merged);
+        if (alive) setHelpers(filtered);
       } catch (e) {
         console.warn("[Dashboard] load helpers failed", e);
         if (alive) setToast(e?.message ?? "Fehler beim Laden der Helfer-Standorte");
@@ -429,7 +465,7 @@ useEffect(() => {
 
   // ---------- Track my location (only helpers) ----------
   useEffect(() => {
-    if (!me?.id || !isHelper || !activeRideoutId) return;
+    if (!me?.id || !shouldTrackLocation || !activeRideoutId) return;
 
     supabase
       .from("rideout_helpers")
@@ -444,12 +480,25 @@ useEffect(() => {
       )
       .then(() => {})
       .catch((e) => console.warn("[Dashboard] rideout helper register failed", e));
-  }, [me?.id, isHelper, activeRideoutId]);
+  }, [me?.id, shouldTrackLocation, activeRideoutId]);
 
   // ---------- Track my location (only helpers) ----------
   useEffect(() => {
     if (!me?.id) return;
-    if (!isHelper) return;
+    if (!shouldTrackLocation) {
+      // Stop sharing: remove stale location/admin pin immediately.
+      supabase.from("helper_locations").delete().eq("user_id", me.id).then(() => {}).catch(() => {});
+      if (activeRideoutId) {
+        supabase
+          .from("rideout_helpers")
+          .delete()
+          .eq("rideout_id", activeRideoutId)
+          .eq("helper_id", me.id)
+          .then(() => {})
+          .catch(() => {});
+      }
+      return;
+    }
     if (!activeRideoutId) {
       // Rideout closed/no access: remove stale location entry so live map clears automatically.
       supabase.from("helper_locations").delete().eq("user_id", me.id).then(() => {}).catch(() => {});
@@ -516,7 +565,7 @@ useEffect(() => {
       stopped = true;
       navigator.geolocation.clearWatch(watchId);
     };
-  }, [me?.id, isHelper, myStatus, canUseLocation, activeRideoutId]);
+  }, [me?.id, shouldTrackLocation, myStatus, canUseLocation, activeRideoutId]);
 
   // ---------- Incidents: load + realtime ----------
   const loadIncidents = useCallback(async () => {
@@ -665,7 +714,7 @@ useEffect(() => {
     const next = myStatus === "busy" ? "free" : "busy";
     setMyStatus(next);
 
-    if (me?.id && isHelper) {
+    if (me?.id && shouldTrackLocation) {
       try {
         await supabase.from("helper_locations").upsert(
           { user_id: me.id, status: next, updated_at: new Date().toISOString() },
@@ -675,6 +724,26 @@ useEffect(() => {
         console.warn("[Dashboard] status update failed", e);
       }
     }
+  };
+
+  const focusHelperOnMap = (helper) => {
+    const map = mapRef.current;
+    const marker = helper?.user_id ? helperMarkersRef.current.get(helper.user_id) : null;
+    if (!map || !marker) return;
+    const latLng = marker.getLatLng?.();
+    if (!latLng) return;
+    map.flyTo(latLng, Math.max(map.getZoom(), 15), { duration: 0.35 });
+    marker.openPopup();
+  };
+
+  const focusIncidentOnMap = (incidentId) => {
+    const map = mapRef.current;
+    const marker = incidentMarkersRef.current.get(incidentId);
+    if (!map || !marker) return;
+    const latLng = marker.getLatLng?.();
+    if (!latLng) return;
+    map.flyTo(latLng, Math.max(map.getZoom(), 15), { duration: 0.35 });
+    marker.openPopup();
   };
 
   const openReportModal = async () => {
@@ -856,6 +925,22 @@ useEffect(() => {
               Status: {statusLabel(myStatus)}
             </button>
           )}
+          {!isHelper && (
+            <div className="row" style={{ gap: 8 }}>
+              <button
+                className="btn btn--ghost"
+                onClick={() => setShareMyLocation((v) => !v)}
+                type="button"
+              >
+                Standort teilen: {shareMyLocation ? "Ein" : "Aus"}
+              </button>
+              {shareMyLocation && (
+                <button className="btn btn--ghost" onClick={toggleMyStatus} type="button">
+                  Status: {statusLabel(myStatus)}
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="mapWrap" style={{ position: "relative" }}>
@@ -953,7 +1038,18 @@ useEffect(() => {
 
               return (
                 <div key={i.id} className="listItem" style={{ alignItems: "center", gap: 10 }}>
-                  <div style={{ flex: 1 }}>
+                  <div
+                    style={{ flex: 1, cursor: "pointer" }}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => focusIncidentOnMap(i.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        focusIncidentOnMap(i.id);
+                      }
+                    }}
+                  >
                     <div className="listItem__title" style={{ display: "flex", gap: 8, alignItems: "center" }}>
                       <span
                         style={{
@@ -1007,10 +1103,24 @@ useEffect(() => {
             <div className="mutedSmall">Noch keine Standorte vorhanden.</div>
           ) : (
             helpers.map((h) => (
-              <div key={h.user_id} className="listItem">
+              <div
+                key={h.user_id}
+                className="listItem"
+                style={{ cursor: h.lat != null && h.lng != null ? "pointer" : "default" }}
+                role="button"
+                tabIndex={0}
+                onClick={() => focusHelperOnMap(h)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    focusHelperOnMap(h);
+                  }
+                }}
+              >
                 <div>
-                  <div className="listItem__title">{h.full_name ?? "Helfer"}</div>
+                  <div className="listItem__title">{helperDisplayName(h)}</div>
                   <div className="mutedTiny">
+                    ID: {h.user_id ? shortUserId(h.user_id) : "unbekannt"} ·{" "}
                     {h.lat != null && h.lng != null
                       ? `Lat ${Number(h.lat).toFixed(4)} · Lng ${Number(h.lng).toFixed(4)}`
                       : "Kein Standort"}
