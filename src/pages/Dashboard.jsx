@@ -111,6 +111,9 @@ export default function Dashboard({ profile, activeRideoutId }) {
   const [helpers, setHelpers] = useState([]); // merged profiles + locations
   const [incidents, setIncidents] = useState([]);
   const [myCoords, setMyCoords] = useState(null); // { lat, lng, ts }
+  const [notificationPermission, setNotificationPermission] = useState(
+    typeof Notification === "undefined" ? "unsupported" : Notification.permission
+  );
 
   const [toast, setToast] = useState(null);
 
@@ -141,6 +144,46 @@ export default function Dashboard({ profile, activeRideoutId }) {
 
   const isHelper = useMemo(() => profile?.role !== "admin", [profile?.role]);
   const shouldTrackLocation = isHelper || shareMyLocation;
+
+  const requestNotificationPermission = async () => {
+    if (typeof Notification === "undefined") {
+      setToast("Benachrichtigungen werden von diesem Browser nicht unterstützt.");
+      setNotificationPermission("unsupported");
+      return;
+    }
+    try {
+      const result = await Notification.requestPermission();
+      setNotificationPermission(result);
+      if (result === "granted") {
+        setToast("Benachrichtigungen aktiviert.");
+      } else if (result === "denied") {
+        setToast("Benachrichtigungen blockiert. Bitte in den Browser-Einstellungen erlauben.");
+      }
+    } catch {
+      setToast("Benachrichtigungen konnten nicht aktiviert werden.");
+    }
+  };
+
+  const showSystemNotification = async (title, body) => {
+    if (typeof Notification === "undefined") return;
+    if (Notification.permission !== "granted") return;
+    try {
+      if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg) {
+          await reg.showNotification(title, {
+            body,
+            tag: "rideout-incident",
+            renotify: true,
+          });
+          return;
+        }
+      }
+      new Notification(title, { body, tag: "rideout-incident" });
+    } catch (e) {
+      console.warn("[Dashboard] show notification failed", e);
+    }
+  };
 
   // ---------- Tick für Live-Dauer ----------
   useEffect(() => {
@@ -698,10 +741,11 @@ useEffect(() => {
 
   // ---------- Notifications ----------
   useEffect(() => {
-    if (typeof Notification === "undefined") return;
-    if (Notification.permission === "default") {
-      Notification.requestPermission().catch(() => {});
+    if (typeof Notification === "undefined") {
+      setNotificationPermission("unsupported");
+      return;
     }
+    setNotificationPermission(Notification.permission);
   }, []);
 
   useEffect(() => {
@@ -723,9 +767,7 @@ useEffect(() => {
           const msg = `Neuer Incident (${severityLabelDe(incident.severity)}) · Verstärkung: ${incident.needs_backup ? "Ja" : "Nein"}`;
           setToast(msg);
 
-          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-            new Notification("Rideout Med", { body: msg });
-          }
+          showSystemNotification("Rideout Med", msg);
         }
       )
       .subscribe();
@@ -987,15 +1029,26 @@ useEffect(() => {
           <div>
             <div style={{ fontWeight: 900, fontSize: 16 }}>Live-Standorte</div>
             <div className="mutedSmall">Helfer: grün = frei · rot = im Einsatz</div>
+            {notificationPermission !== "granted" && (
+              <div className="mutedTiny" style={{ marginTop: 6 }}>
+                Push-Hinweis: Für Handy-Popups bitte "Benachrichtigungen aktivieren".
+              </div>
+            )}
           </div>
 
-          {isHelper && (
-            <button className="btn btn--ghost" onClick={toggleMyStatus} type="button">
-              Status: {statusLabel(myStatus)}
-            </button>
-          )}
-          {!isHelper && (
-            <div className="row" style={{ gap: 8 }}>
+          <div className="row" style={{ gap: 8 }}>
+            {notificationPermission !== "granted" && notificationPermission !== "unsupported" && (
+              <button className="btn btn--ghost" onClick={requestNotificationPermission} type="button">
+                Benachrichtigungen aktivieren
+              </button>
+            )}
+            {isHelper && (
+              <button className="btn btn--ghost" onClick={toggleMyStatus} type="button">
+                Status: {statusLabel(myStatus)}
+              </button>
+            )}
+            {!isHelper && (
+              <>
               <button
                 className="btn btn--ghost"
                 onClick={() => setShareMyLocation((v) => !v)}
@@ -1008,8 +1061,9 @@ useEffect(() => {
                   Status: {statusLabel(myStatus)}
                 </button>
               )}
-            </div>
-          )}
+              </>
+            )}
+          </div>
         </div>
 
         <div className="mapWrap" style={{ position: "relative" }}>
