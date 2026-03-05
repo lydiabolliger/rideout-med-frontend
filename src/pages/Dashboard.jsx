@@ -591,6 +591,7 @@ useEffect(() => {
   useEffect(() => {
     let alive = true;
     let channel = null;
+    let intervalId = null;
 
     (async () => {
       await loadIncidents();
@@ -608,9 +609,16 @@ useEffect(() => {
       )
       .subscribe();
 
+    // Fallback polling in case realtime drops on some clients/networks.
+    intervalId = window.setInterval(() => {
+      if (!alive) return;
+      loadIncidents();
+    }, 10000);
+
     return () => {
       alive = false;
       if (channel) supabase.removeChannel(channel);
+      if (intervalId) window.clearInterval(intervalId);
     };
   }, [loadIncidents]);
 
@@ -793,11 +801,23 @@ useEffect(() => {
         rideout_id: activeRideoutId,
       };
 
-      const { error } = await supabase.from("incidents").insert(payload);
+      const { data: inserted, error } = await supabase
+        .from("incidents")
+        .insert(payload)
+        .select("id, created_at, lat, lng, severity, needs_backup, created_by, closed_at, note, rideout_id")
+        .single();
       if (error) throw error;
 
       // wenn Helfer meldet, automatisch busy setzen
       if (isHelper) setMyStatus("busy");
+
+      if (inserted?.id) {
+        setIncidents((prev) => {
+          const next = [inserted, ...(prev ?? []).filter((x) => x.id !== inserted.id)];
+          return next.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        });
+      }
+      await loadIncidents();
 
       setToast("Incident gemeldet ✅");
       setOpenReport(false);
