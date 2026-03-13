@@ -101,6 +101,16 @@ function helperDisplayName(helper) {
   return `Helfer ${shortUserId(helper?.user_id)}`;
 }
 
+function snapshotHelperName(profile, user) {
+  const profileName = String(profile?.full_name ?? "").trim();
+  if (profileName) return profileName;
+  const metaName = String(
+    user?.user_metadata?.full_name ?? user?.user_metadata?.name ?? ""
+  ).trim();
+  if (metaName) return metaName;
+  return null;
+}
+
 export default function Dashboard({ profile, activeRideoutId }) {
   const [me, setMe] = useState(null);
 
@@ -161,27 +171,6 @@ export default function Dashboard({ profile, activeRideoutId }) {
       }
     } catch {
       setToast("Benachrichtigungen konnten nicht aktiviert werden.");
-    }
-  };
-
-  const showSystemNotification = async (title, body) => {
-    if (typeof Notification === "undefined") return;
-    if (Notification.permission !== "granted") return;
-    try {
-      if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
-        const reg = await navigator.serviceWorker.getRegistration();
-        if (reg) {
-          await reg.showNotification(title, {
-            body,
-            tag: "rideout-incident",
-            renotify: true,
-          });
-          return;
-        }
-      }
-      new Notification(title, { body, tag: "rideout-incident" });
-    } catch (e) {
-      console.warn("[Dashboard] show notification failed", e);
     }
   };
 
@@ -432,11 +421,7 @@ useEffect(() => {
         const participantIds = (participants ?? [])
           .map((p) => p?.helper_id)
           .filter((id) => typeof id === "string" && id.length > 0);
-        const userIds = new Set([
-          ...participantIds,
-          ...Array.from(profileMap.keys()),
-          ...Array.from(locMap.keys()),
-        ]);
+        const userIds = new Set(participantIds);
 
         const merged = Array.from(userIds).map((userId) => {
           const p = profileMap.get(userId);
@@ -518,6 +503,7 @@ useEffect(() => {
         {
           rideout_id: activeRideoutId,
           helper_id: me.id,
+          helper_name: snapshotHelperName(profile, me),
           joined_at: new Date().toISOString(),
           last_seen_at: new Date().toISOString(),
         },
@@ -525,7 +511,7 @@ useEffect(() => {
       )
       .then(() => {})
       .catch((e) => console.warn("[Dashboard] rideout helper register failed", e));
-  }, [me?.id, shouldTrackLocation, activeRideoutId]);
+  }, [me?.id, me, profile, shouldTrackLocation, activeRideoutId]);
 
   // ---------- Track my location (only helpers) ----------
   useEffect(() => {
@@ -563,6 +549,7 @@ useEffect(() => {
           {
             rideout_id: activeRideoutId,
             helper_id: me.id,
+            helper_name: snapshotHelperName(profile, me),
             joined_at: new Date().toISOString(),
             last_seen_at: new Date().toISOString(),
           },
@@ -611,7 +598,7 @@ useEffect(() => {
       stopped = true;
       navigator.geolocation.clearWatch(watchId);
     };
-  }, [me?.id, shouldTrackLocation, myStatus, canUseLocation, activeRideoutId]);
+  }, [me?.id, me, profile, shouldTrackLocation, myStatus, canUseLocation, activeRideoutId]);
 
   // ---------- Incidents: load + realtime ----------
   const loadIncidents = useCallback(async () => {
@@ -766,8 +753,6 @@ useEffect(() => {
 
           const msg = `Neuer Incident (${severityLabelDe(incident.severity)}) · Verstärkung: ${incident.needs_backup ? "Ja" : "Nein"}`;
           setToast(msg);
-
-          showSystemNotification("Rideout Med", msg);
         }
       )
       .subscribe();
@@ -933,6 +918,7 @@ useEffect(() => {
         const { error } = await supabase.from("incident_assignments").insert({
           incident_id: incidentId,
           helper_id: me.id,
+          helper_name: snapshotHelperName(profile, me),
           joined_at: new Date().toISOString(),
         });
         if (error) throw error;
@@ -955,7 +941,7 @@ useEffect(() => {
         setSubmitting(false);
       }
     },
-    [me?.id, activeAssignment?.incident_id, isHelper, loadActiveAssignment]
+    [me?.id, me, profile, activeAssignment?.incident_id, isHelper, loadActiveAssignment]
   );
 
   // ✅ Einsatz beenden: left_at setzen + Dauer ist dann ableitbar (left_at - joined_at)

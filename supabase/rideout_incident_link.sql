@@ -10,10 +10,29 @@ create index if not exists incidents_rideout_id_idx
 create table if not exists public.rideout_helpers (
   rideout_id uuid not null references public.rideouts(id) on delete cascade,
   helper_id uuid not null references auth.users(id) on delete cascade,
+  helper_name text null,
   joined_at timestamptz not null default now(),
   last_seen_at timestamptz not null default now(),
   primary key (rideout_id, helper_id)
 );
+
+alter table public.rideout_helpers
+  add column if not exists helper_name text;
+
+update public.rideout_helpers rh
+set helper_name = p.full_name
+from public.profiles p
+where rh.helper_id = p.user_id
+  and coalesce(nullif(trim(rh.helper_name), ''), '') = '';
+
+alter table if exists public.incident_assignments
+  add column if not exists helper_name text;
+
+update public.incident_assignments ia
+set helper_name = p.full_name
+from public.profiles p
+where ia.helper_id = p.user_id
+  and coalesce(nullif(trim(ia.helper_name), ''), '') = '';
 
 create index if not exists rideout_helpers_rideout_idx
   on public.rideout_helpers (rideout_id);

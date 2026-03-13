@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Routes, Route, Navigate, Outlet } from "react-router-dom";
 import { supabase } from "./lib/supabase";
 
@@ -9,6 +9,7 @@ import Incidents from "./pages/Incidents.jsx";
 import Login from "./pages/Login.jsx";
 import Pin from "./pages/Pin.jsx";
 import Profile from "./pages/Profile.jsx";
+import { severityLabelDe } from "./lib/severity";
 
 const RIDEOUT_TOKEN_STORAGE_KEY = "rideout_join_token";
 const RIDEOUT_TOKEN_FRESH_KEY = "rideout_join_token_fresh";
@@ -48,6 +49,27 @@ function consumeFreshRideoutToken(token) {
   if (!fresh || !token || fresh !== token) return false;
   sessionStorage.removeItem(RIDEOUT_TOKEN_FRESH_KEY);
   return true;
+}
+
+async function showSystemNotification(title, body) {
+  if (typeof Notification === "undefined") return;
+  if (Notification.permission !== "granted") return;
+  try {
+    if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) {
+        await reg.showNotification(title, {
+          body,
+          tag: "rideout-incident-global",
+          renotify: true,
+        });
+        return;
+      }
+    }
+    new Notification(title, { body, tag: "rideout-incident-global" });
+  } catch (e) {
+    console.warn("[App] show notification failed", e);
+  }
 }
 
 function ProtectedRoute({ session, loading }) {
@@ -115,10 +137,49 @@ export default function App() {
   const [rideoutAccessLoading, setRideoutAccessLoading] = useState(true);
   const [hasRideoutAccess, setHasRideoutAccess] = useState(false);
   const [activeRideoutId, setActiveRideoutId] = useState(null);
+  const notifiedIncidentIdsRef = useRef(new Set());
 
   useEffect(() => {
     storeRideoutTokenFromUrl();
   }, []);
+
+  useEffect(() => {
+    if (!session?.user?.id || !activeRideoutId) {
+      notifiedIncidentIdsRef.current = new Set();
+      return;
+    }
+
+    let alive = true;
+    const channel = supabase
+      .channel(`incidents-notify-global-${activeRideoutId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "incidents",
+          filter: `rideout_id=eq.${activeRideoutId}`,
+        },
+        async (payload) => {
+          if (!alive) return;
+          const incident = payload.new;
+          if (!incident?.id || notifiedIncidentIdsRef.current.has(incident.id)) return;
+          notifiedIncidentIdsRef.current.add(incident.id);
+          const severity = severityLabelDe(incident.severity ?? "minor");
+          const needsBackup = incident.needs_backup ? "Ja" : "Nein";
+          await showSystemNotification(
+            "Rideout Med",
+            `Neuer Incident (${severity}) · Verstärkung: ${needsBackup}`
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      alive = false;
+      supabase.removeChannel(channel);
+    };
+  }, [session?.user?.id, activeRideoutId]);
 
   useEffect(() => {
     let mounted = true;

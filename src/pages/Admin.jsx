@@ -88,8 +88,8 @@ export default function Admin({ profile, onProfileUpdated }) {
     return map;
   }, [nameByUserId, profilesRows]);
 
-  const resolveUserName = (userId) => {
-    const name = displayNameByUserId[userId];
+  const resolveUserName = (userId, fallbackName = null) => {
+    const name = displayNameByUserId[userId] ?? fallbackName;
     if (name && String(name).trim().length > 0) return name;
     return "Unbenannter Helfer";
   };
@@ -291,27 +291,23 @@ export default function Admin({ profile, onProfileUpdated }) {
     try {
       const [
         { data: profileData, error: profileErr },
-        { data: helperLocData, error: helperLocErr },
         { data: helperRideoutData, error: helperRideoutErr },
       ] = await withTimeout(
         Promise.all([
           supabase.from("profiles").select("user_id, full_name, role"),
-          supabase.from("helper_locations").select("user_id"),
           activeRideout?.id
             ? supabase.from("rideout_helpers").select("helper_id").eq("rideout_id", activeRideout.id)
-            : supabase.from("rideout_helpers").select("helper_id"),
+            : Promise.resolve({ data: [], error: null }),
         ]),
         12000,
         "Zeitüberschreitung beim Laden der Benutzerverwaltung."
       );
       if (profileErr) throw profileErr;
-      if (helperLocErr) throw helperLocErr;
       if (helperRideoutErr) throw helperRideoutErr;
 
       const profileMap = new Map((profileData ?? []).map((p) => [p.user_id, p]));
       const ids = new Set([
         ...Array.from(profileMap.keys()),
-        ...(helperLocData ?? []).map((h) => h.user_id).filter(Boolean),
         ...(helperRideoutData ?? []).map((h) => h.helper_id).filter(Boolean),
       ]);
 
@@ -455,12 +451,12 @@ export default function Admin({ profile, onProfileUpdated }) {
             .limit(2000),
           supabase
             .from("incident_assignments")
-            .select("incident_id, helper_id, joined_at, left_at")
+            .select("incident_id, helper_id, helper_name, joined_at, left_at")
             .order("joined_at", { ascending: true })
             .limit(8000),
           supabase
             .from("rideout_helpers")
-            .select("rideout_id, helper_id, joined_at, last_seen_at")
+            .select("rideout_id, helper_id, helper_name, joined_at, last_seen_at")
             .order("joined_at", { ascending: true })
             .limit(8000),
           supabase.from("profiles").select("user_id, full_name"),
@@ -537,6 +533,12 @@ export default function Admin({ profile, onProfileUpdated }) {
     loadAnalytics();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    loadProfiles();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, activeRideout?.id]);
 
   if (!isAdmin) {
     return (
@@ -722,8 +724,8 @@ export default function Admin({ profile, onProfileUpdated }) {
                           <div className="mutedSmall">Keine Helfer gespeichert.</div>
                         ) : (
                           (helpersByRideout[rideout.id] ?? []).map((h, idx) => (
-                            <div key={`${h.helper_id}-${h.joined_at}-${idx}`} className="mutedSmall">
-                              {resolveUserName(h.helper_id)} | seit {fmtDate(h.joined_at)}
+                              <div key={`${h.helper_id}-${h.joined_at}-${idx}`} className="mutedSmall">
+                              {resolveUserName(h.helper_id, h.helper_name)} | seit {fmtDate(h.joined_at)}
                             </div>
                           ))
                         )}
@@ -782,7 +784,7 @@ export default function Admin({ profile, onProfileUpdated }) {
                                       const durationMs = msBetween(a.joined_at, leaveIso);
                                       return (
                                         <div key={`${a.helper_id}-${a.joined_at}-${idx}`} className="mutedSmall">
-                                          {resolveUserName(a.helper_id)} | von {fmtDate(a.joined_at)} bis {a.left_at ? fmtDate(a.left_at) : "offen"} | {fmtDuration(durationMs)}
+                                          {resolveUserName(a.helper_id, a.helper_name)} | von {fmtDate(a.joined_at)} bis {a.left_at ? fmtDate(a.left_at) : "offen"} | {fmtDuration(durationMs)}
                                         </div>
                                       );
                                     })
